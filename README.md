@@ -1,2 +1,2 @@
-# cs651_final_project
-Distributed Systems Final Project
+# CS651 Distributed Systems Final Project: Party Distributed Processing
+### Authors: Justin Chen and Johnson Lam
