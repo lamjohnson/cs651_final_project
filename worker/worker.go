@@ -24,18 +24,7 @@ func main () {
 	// Already joined a party
 	if len(conf.Party.IP) > 0 && conf.Party.Port > 0 && len(conf.Party.Alias) > 0 {
 		fmt.Println(conf.Party)
-		// Notify master that I'm online
-		// ok, err := message.JoinParty(&conf)
 		message.JoinParty(&conf)
-
-		// if err != nil {
-		// 	fmt.Println("Dun fucked up...")
-		// }
-
-		// if ok {
-		// 	fmt.Println("Joined party! Yay!")
-		// }
-
 	} else {
 		fmt.Println("specify party to join and complete config...")
 	}

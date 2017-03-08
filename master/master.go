@@ -13,6 +13,9 @@ import (
     "fmt"
     "net/http"
     "net"
+    "io"
+    "config"
+    "encoding/json"
     // "strings"
     // "reflect"
 )
@@ -55,7 +58,27 @@ func submitJob(w http.ResponseWriter, req *http.Request) {
 }
 
 func join(w http.ResponseWriter, req *http.Request) {
-    fmt.Println("Someone joined the party")
+    
+    // Decode configuration passed as a parameter
+    var conf config.Configuration
+    err := json.NewDecoder(req.Body).Decode(&conf)
+
+    if err != nil {
+        http.Error(w, err.Error(), 400)
+        return
+    }
+
+    // Get client's IP address
+    _, err = getIP(req)
+
+    if err != nil {
+        fmt.Println(err)
+    }
+
+    // Receipt for client joining the party
+    io.WriteString(w, "Welcome to the party, "+conf.Id.Alias+"\n")
+
+
     // Authenticate requester
     // If not in auth list, reject
     // Else, ping back that they were authenticated
