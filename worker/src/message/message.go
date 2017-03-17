@@ -23,6 +23,7 @@ import (
 	// "net"
 )
 
+// TODO: Should pass url as a parameter
 func JoinParty(conf *config.Configuration) {//(bool, error) {
 	url := "http://127.0.0.1:8080/join"
     b := new(bytes.Buffer)

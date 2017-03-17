@@ -37,6 +37,7 @@ func getIP(req *http.Request) (net.IP, error) {
     return userIP, nil
 }
 
+// Not currently used
 func handler(w http.ResponseWriter, req *http.Request) {
     fmt.Fprintf(w, "Master up and running!", req.URL.Path[1:])
     // ip, _ := getIP(req)
@@ -49,6 +50,7 @@ func handler(w http.ResponseWriter, req *http.Request) {
 	// }
 }
 
+// /subm
 func submitJob(w http.ResponseWriter, req *http.Request) {
     params := req.URL.Query()
     for k, v := range params {
