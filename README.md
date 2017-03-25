@@ -35,3 +35,8 @@ Secondary:
 Other:
 - Master should authenticate members joining party
 - Master should have cached file containing the party password, which all members agree on before hand for join the party, and all invited members
+
+Completed:
+- Periodic heartbeats for worker and master 
+- Automatic script run on boot 
+
