@@ -3,6 +3,22 @@
 #### Authors: Johnson Lam and Justin Chen 
 #### BUCS CS651: Distributed Systems
 
+### Setup for Linux and OSX
+Setup so that the worker automatically launches when the system initially starts up.
+For OSX:
+```
+$ nano /.bash_profile
+```
+For Linux:
+```
+$ nano /.bashrc
+```
+Appending the following to the file and replace `<abs path>` with absolute path to the `party.sh` file:
+```
+$ export GOROOT=/usr/local/go/
+$ export PATH=$PATH:$GOROOT/bin
+$ sh <abs path>/party.sh
+```
 
 To test on local, open one terminal for the master, and a terminal for each worker. In the master's terminal:
 ```
