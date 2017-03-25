@@ -23,7 +23,6 @@ import (
 
 type ServerState struct {
 	timeout		*time.Timer
-	resetTimer 	chan int 
 	active		bool
 }
 
@@ -53,20 +52,26 @@ func handler(w http.ResponseWriter, req *http.Request) {
     // ip, _ := getIP(req)
 
     req.Header.Get("x-forwarded-for")
+
+ //    ips := strings.Split("10.0.0.1, 10.0.0.2, 10.0.0.3", ", ")
+	// for _, ip := range ips {
+	//     fmt.Println(ip)
+	// }
 }
 
 func submitJob(w http.ResponseWriter, req *http.Request) {
     params := req.URL.Query()
     for k, v := range params {
+
         fmt.Println(k, " ", v)
     }
 }
 
 func join(w http.ResponseWriter, req *http.Request) {
+    
     // Decode configuration passed as a parameter
     var conf config.Configuration
     err := json.NewDecoder(req.Body).Decode(&conf)
-	fmt.Printf("Worker %v joining master\n", conf.Id.UID)
 
     if err != nil {
         http.Error(w, err.Error(), 400)
@@ -77,20 +82,18 @@ func join(w http.ResponseWriter, req *http.Request) {
     _, err = getIP(req)
 
     if err != nil {
-		fmt.Println(err)
+        fmt.Println(err)
     }
 
 	// Initialize heartbeat timer for client 
 	uid := conf.Id.UID
-	servers[uid].timeout = setTimer(false, 1, servers[uid].timeout)
+	servers[uid].timeout = time.NewTimer(1 * time.Second)
 
-	// when timeout expires, notify master of this client 
+	// when timeout expires, notify master of the client 
 	go func(uid int, timeout *time.Timer) {
 		for {
-			select {
-			case <- timeout.C:
-				expire <- uid
-			}
+			<- timeout.C
+			expire <- uid
 		}
 	}(uid, servers[uid].timeout)
 
@@ -105,55 +108,17 @@ func join(w http.ResponseWriter, req *http.Request) {
     
 }
 
-func notify(w http.ResponseWriter, req *http.Request) {
-    // Decode configuration passed as a parameter
-    var conf config.Configuration
-    err := json.NewDecoder(req.Body).Decode(&conf)
-	fmt.Printf("Worker %v heartbeat\n", conf.Id.UID)
-
-    if err != nil {
-        http.Error(w, err.Error(), 400)
-        return
-    }
-
-    // Get client's IP address
-    _, err = getIP(req)
-
-    if err != nil {
-        fmt.Println(err)
-    }
-
-	// Reset heartbeat timer for client 
-	uid := conf.Id.UID
-	servers[uid].timeout = setTimer(true, 1, servers[uid].timeout)
-
-    // Receipt for client joining the party
-    io.WriteString(w, "Notified the party, "+conf.Id.Alias+"\n")
-}
-
-func setTimer(stop bool, length int, timeout *time.Timer) *time.Timer {
-	if stop {
-		timeout.Stop()
-		timeout.Reset(time.Duration(length)* time.Second)
-	} else {
-		timeout = time.NewTimer(time.Duration(length)* time.Second)
-	}
-	return timeout
-}
-
-
 func heartbeat() {
 	for {
 		select {
 		case server_id := <- expire:
-			fmt.Printf("Timer expired on worker %v\n", server_id)
+			fmt.Printf("Timer expired on server %v\n", server_id)
 		} 
 	}
 }
 
 func initialize() {
 	expire = make(chan int) 
-	// resetTimer = make(chan int) 
 }
 
 func main() {
@@ -164,6 +129,5 @@ func main() {
     // http.HandleFunc("/", handler)
     http.HandleFunc("/submitjob", submitJob)
     http.HandleFunc("/join", join)
-	http.HandleFunc("/notify", notify) 
     http.ListenAndServe(":8080", nil)
 }
