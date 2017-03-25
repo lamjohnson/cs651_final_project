@@ -6,7 +6,8 @@
 	},
 	"id": {
 		"ip":"127.0.0.1",
-		"alias":"JChen"
+		"alias":"JChen",
+        "uid": 0
 	},
 	"storage": {
 		"avail":1,

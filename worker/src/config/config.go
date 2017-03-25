@@ -62,6 +62,7 @@ type Party struct {
 type Identity struct {
 	IP 	  string `json:"ip"`
 	Alias string `json:"alias"`
+	UID   int    `json:"uid"`
 }
 
 type Storage struct {
