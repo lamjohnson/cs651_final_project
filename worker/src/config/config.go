@@ -16,6 +16,8 @@ import (
 	"os"
 	"log"
 	"strconv"
+	"runtime"
+	"path"
 )
 
 type Configuration struct {
@@ -35,12 +37,13 @@ type Configuration struct {
 // Loads the saved configuration
 // Loads config file from /src/config
 func (c *Configuration) Load(conf string) {
-	cwd, err := os.Getwd()
+	_, filename, _, _ := runtime.Caller(1)
 
-	if _, err := os.Stat(cwd+"/src/config/"+conf); os.IsNotExist(err) {
+	configPath := path.Dir(filename)+"/src/config/"+conf
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		log.Fatal("could not load "+conf)
 	}
-	raw, err := ioutil.ReadFile("./src/config/"+conf)
+	raw, err := ioutil.ReadFile(configPath)
 
 	if err != nil {
 		log.Fatal("couldn't read config...fuck you!")
