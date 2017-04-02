@@ -25,8 +25,8 @@ import (
 
 // TODO: Should pass url as a parameter
 func JoinParty(conf *config.Configuration) {//(bool, error) {
-	// url := "http://127.0.0.1:8080/join"
-	url := "http://128.197.11.36:8080/join"
+	url := "http://127.0.0.1:8080/join"
+	// url := "http://128.197.11.36:8080/join"
 	// url := "http://192.168.122.1:8080/join"
     b := new(bytes.Buffer)
     json.NewEncoder(b).Encode(conf)
@@ -35,7 +35,7 @@ func JoinParty(conf *config.Configuration) {//(bool, error) {
 }
 
 func NotifyParty(conf *config.Configuration) {//(bool, error) {
-	url := "http://127.0.0.1:8080/notify"
+	url := "http://127.0.0.1:8080/heartbeat"
     b := new(bytes.Buffer)
     json.NewEncoder(b).Encode(conf)
     res, _ := http.Post(url, "application/json; charset=utf-8", b)
