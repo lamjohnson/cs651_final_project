@@ -128,7 +128,7 @@ func notify(w http.ResponseWriter, req *http.Request) {
 	servers[uid].timeout = setTimer(true, 1, servers[uid].timeout)
 
     // Receipt for client joining the party
-    io.WriteString(w, "Notified the party, "+conf.Id.Alias+"\n")
+    // io.WriteString(w, "Notified the party, "+conf.Id.Alias+"\n")
 }
 
 func setTimer(stop bool, length int, timeout *time.Timer) *time.Timer {
