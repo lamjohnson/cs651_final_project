@@ -19,18 +19,12 @@ import (
 	"time" 
 	"log"
 	"sync"
-    // "strings"
-    // "reflect"
+	"crypto/rand"
+	"math/big"
 )
 
-type ServerState struct {
-	timeout		*time.Timer
-	resetTimer 	chan int 
-	active		bool
-}
-
 var expiredServers 	chan int 
-var servers			map[int]*ServerState
+var servers			map[int]*WorkerState
 var activeWork		bool 
 var muServers		sync.Mutex
 var muJobs			sync.Mutex
@@ -39,14 +33,39 @@ const create = "create"
 const reset	 = "reset"
 const close  = "close"
 
+type WorkerState struct {
+	workerId	int
+	url 		string 
+	timeout		*time.Timer
+	heartbeat 	chan bool
+	fail 		int 
+	active		bool
+}
+
+func nrand() int64 {
+	max := big.NewInt(int64(1) << 62)
+	bigx, _ := rand.Int(rand.Reader, max)
+	x := bigx.Int64()
+	return x
+}
+
+//
+// Functions for handling requests from workers 
+//
+
+// - Mark chunk of file as finished, send next chunk 
 func finishChunk(w http.ResponseWriter, req *http.Request) {
 	// pass 
 }
 
 // look at mapreduce code 
+// - No need to specify work type, assume word count 
+//     - Later on specify type of work to be done 
+// - Include file or filename url to retreive 
+// - Divide up file into chunks and send to workers 
 func submitJob(w http.ResponseWriter, req *http.Request) {
 	muJobs.Lock() 
-	avail_workers := currentServers()
+	// avail_workers := currentServers()
 	for {
 		// hand out job to available worker 
 		select {
@@ -56,9 +75,6 @@ func submitJob(w http.ResponseWriter, req *http.Request) {
 			// send work to another worker 
 		}
 	}
-	
-
-
 	muJobs.Unlock()
     // params := req.URL.Query()
     // for k, v := range params {
@@ -66,68 +82,74 @@ func submitJob(w http.ResponseWriter, req *http.Request) {
     // }
 }
 
-func join(w http.ResponseWriter, req *http.Request) {
-	conf, err := decodeRequest(req) 
-    if err != nil {
-        http.Error(w, err.Error(), 400)
-        return
-    }
-	uid := conf.Id.UID
-	
-	if _, ok := servers[uid]; ok {
-		log.Fatal("Intiailzing a worker that exists...")
-	}
-
-	fmt.Printf("Worker %v joining master\n", conf.Id.UID)
-
-	// Initialize worker mapping  
-	initializeWorker(uid)
-	servers[uid].timeout = setTimer(create, 1, servers[uid].timeout)
-
-	// go routine to notify master when client heartbeat expires 
-	go func(server_id int, timeout *time.Timer) {
-		for {
-			select {
-			case <- timeout.C:
-				fmt.Printf("Deleting worker from mapping\n")
-				delete(servers, server_id)
-				expiredServers <- uid
-			}
-		}
-	}(uid, servers[uid].timeout)
-
-    // Receipt for client joining the party
-    io.WriteString(w, "Welcome to the party, "+conf.Id.Alias+"\n")
-}
-
-func incomingHeartbeat(w http.ResponseWriter, req *http.Request) {
+// - Check availability of worker 
+// - Check progress of workers (github.com/cheggaaa/pb)
+func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
 	conf, err := decodeRequest(req)
     if err != nil {
         http.Error(w, err.Error(), 400)
         return
     }
 	uid := conf.Id.UID
-
 	if _, ok := servers[uid]; !ok {
 		log.Fatal("Worker expired...reinitialze worker...")
 	}
-
-	// Reset heartbeat timer for worker 
-	servers[uid].timeout = setTimer(reset, 1, servers[uid].timeout)
-
+	servers[uid].heartbeat <- true 
 }
 
-func currentServers() [] int {
-	muServers.Lock()
-	servers := make([]int, len(servers))
-	muServers.Unlock()
-	i := 0 
-	for key := range servers {
-		servers[i] = key 
-		i++
+// - Config: worker machine includes available dependencies 
+func join(w http.ResponseWriter, req *http.Request) {
+	conf, err := decodeRequest(req) 
+	ip, _ := getIP(req)
+    if err != nil {
+        http.Error(w, err.Error(), 400)
+        return
+    }
+	uid := conf.Id.UID
+	if _, ok := servers[uid]; ok {
+		log.Fatal("Intiailzing a worker that exists...")
 	}
-	return servers 
+
+	fmt.Printf("Worker %v joining master\n", conf.Id.Alias)
+	initializeWorker(uid, ip.String())
+
+    // Receipt for client joining the party
+    io.WriteString(w, "Welcome to the party, "+conf.Id.Alias+"\n")
 }
+//
+// Functions for sending requests to worker 
+//
+func sendHeartbeat() {
+	for {
+		muServers.Lock()
+		for worker := range servers {
+			go func(worker *WorkerState) {
+				printl("Pinging worker %v at ip %v", worker.workerId, worker.url)
+				url := "http://127.0.0.1:8081/w_heartbeat"
+				http.Get(url)
+			} (servers[worker])
+		}
+		muServers.Unlock()
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// func currentServers() [] int {
+// 	muServers.Lock()
+// 	servers := make([]int, len(servers))
+// 	muServers.Unlock()
+// 	i := 0 
+// 	for key := range servers {
+// 		servers[i] = key 
+// 	worker.	i++
+// 	}
+// 	return servers 
+// }
+
+
+//
+// Internal Functions 
+//
 
 // https://blog.golang.org/context/userip/userip.go
 func getIP(req *http.Request) (net.IP, error) {
@@ -135,9 +157,7 @@ func getIP(req *http.Request) (net.IP, error) {
     if err != nil {
         return nil, fmt.Errorf("userip: %q is not IP:port", req.RemoteAddr)
     }
-
     userIP := net.ParseIP(ip)
-
     if userIP == nil {
         return nil, fmt.Errorf("userip: %q is not IP:port", req.RemoteAddr)
     }
@@ -163,7 +183,7 @@ func setTimer(command string, length int, timeout *time.Timer) *time.Timer {
 	return timeout 
 }
 
-
+// Run a thread for handling expired workers 
 func notifyExpired() {
 	for {
 		select {
@@ -174,23 +194,63 @@ func notifyExpired() {
 }
 
 func initializeMaster() {
-	servers = make(map[int]*ServerState)
+	servers = make(map[int]*WorkerState)
 	expiredServers = make(chan int) 
 	activeWork = false 
 }
 
-func initializeWorker(worker_id int) {
-	var init_state ServerState  
+func initializeWorker(worker_id int, ip string) *WorkerState {
+	var init_state WorkerState  
+	init_state.workerId = worker_id
+	init_state.url = ip 
+	init_state.heartbeat = make(chan bool)
+	init_state.fail = 0 
+	init_state.active = true
+	
 	servers[worker_id] = &init_state
+	servers[worker_id].timeout = setTimer(create, 5, init_state.timeout)
+
+	go func(server_id int, worker *WorkerState) {
+		Loop:
+			for {
+				select {
+				case <- worker.timeout.C:
+					if worker.fail < 3 {
+						printl("Failed to hear from worker %v %v time(s)", worker.workerId, worker.fail)
+						worker.timeout = setTimer(reset, 5, worker.timeout) 
+						worker.fail++
+					} else {
+						fmt.Printf("Deleting worker from active workers list\n")
+						muServers.Lock()
+						delete(servers, server_id)
+						muServers.Unlock()
+
+						expiredServers <- server_id
+						break Loop
+					}
+				case <- worker.heartbeat:
+					worker.timeout = setTimer(reset, 5, worker.timeout) 
+					worker.fail = 0 
+				}
+			}
+	}(worker_id, &init_state)
+
+	return &init_state 
+}
+
+func printl(format string, a ...interface{}) {
+	fmt.Printf(format + "\n", a...)
 }
 
 func main() {
 	fmt.Println("Listening on port 8080...")
 	initializeMaster()
+
 	go notifyExpired()
+	go sendHeartbeat()
 
     http.HandleFunc("/submitjob", submitJob)
     http.HandleFunc("/join", join)
-	http.HandleFunc("/heartbeat", incomingHeartbeat) 
+	http.HandleFunc("/m_heartbeat", heartbeatHandler) 
     http.ListenAndServe(":8080", nil)
 }
