@@ -14,6 +14,8 @@ import (
     "net/http"
     "net"
     "io"
+	"os"
+	"bufio"
     "config"
     "encoding/json"
 	"time" 
@@ -21,25 +23,66 @@ import (
 	"sync"
 	"crypto/rand"
 	"math/big"
+	"bytes"
+	// "strings"
 )
 
 var expiredServers 	chan int 
-var servers			map[int]*WorkerState
-var activeWork		bool 
-var muServers		sync.Mutex
+var currentWorkers	map[int]*WorkerState //key: worker_id
+var currentJobs 	map[int]*WorkerProgress //key: worker_id
+var activeJob	 	bool 
+var totalFiles 		int 
+var finishedFiles 	int 
+var muWorkers		sync.Mutex
 var muJobs			sync.Mutex
+var nextWorker 		chan int
+var nextJob 		chan FileEntry
+var finishedAll 	chan int
+var finalTotal 		int 
 
 const create = "create"
 const reset	 = "reset"
 const close  = "close"
+const nNumber = 1000
+
+type JobRequest struct {
+	Filename 	string
+	Worker_id 	int 
+}
+
+type JobArgs struct {
+	Worker_id 	int
+	File_id  	string	
+	File 		string 
+}
+
+type JobReply struct {
+	Worker_id 	int 
+	File_id 	string	
+	Progress 	int 
+}
 
 type WorkerState struct {
-	workerId	int
-	url 		string 
-	timeout		*time.Timer
-	heartbeat 	chan bool
-	fail 		int 
-	active		bool
+	WorkerId	int
+	Ip 			string 
+	Timeout		*time.Timer
+	Heartbeat 	chan bool
+	Failures 	int 
+}
+
+type WorkerProgress struct {
+	file_id 	string
+	progress 	int 
+	total		int 
+}
+
+type MasterState struct {
+	
+}
+
+type FileEntry struct {
+	Filename 	string 
+	Data 		string
 }
 
 func nrand() int64 {
@@ -53,9 +96,36 @@ func nrand() int64 {
 // Functions for handling requests from workers 
 //
 
-// - Mark chunk of file as finished, send next chunk 
-func finishChunk(w http.ResponseWriter, req *http.Request) {
-	// pass 
+// - DONE: Mark chunk of file as finished
+// - TODO: Send next chunk (do in submit job handler) 
+func chunkHandler(w http.ResponseWriter, req *http.Request) {
+	job, err :=  decodeJob(req) 
+    if err != nil {
+        http.Error(w, err.Error(), 400)
+        return
+	}
+	finalTotal += job.Progress
+
+	lastProgress := currentJobs[job.Worker_id]
+	printl("Worker: %v", job.Worker_id)
+	printl("Current job progress: %v", currentJobs)
+	if lastProgress.file_id == job.File_id {
+		printl("Found job in current jobs")
+		delete(currentJobs, job.Worker_id)
+		os.Remove(job.File_id) 
+		finishedFiles++
+	}
+
+	activeJob = false
+	if finishedFiles == totalFiles || !activeJob {
+		//TODO: Reply to client that job has finished along with results 	
+		finishedAll <- 0
+		return
+	}
+
+	go func(worker_id int) {
+		nextWorker <- worker_id
+	} (job.Worker_id)
 }
 
 // look at mapreduce code 
@@ -63,50 +133,67 @@ func finishChunk(w http.ResponseWriter, req *http.Request) {
 //     - Later on specify type of work to be done 
 // - Include file or filename url to retreive 
 // - Divide up file into chunks and send to workers 
-func submitJob(w http.ResponseWriter, req *http.Request) {
-	muJobs.Lock() 
-	// avail_workers := currentServers()
-	for {
-		// hand out job to available worker 
-		select {
-		//case worker becomes available
-			// check for next chunk to send 
-		//case timer on worker expired while doing work 
-			// send work to another worker 
-		}
+func submitRequest(w http.ResponseWriter, req *http.Request) {
+	job, err := decodeRequest(req)
+	if err != nil {
+        http.Error(w, err.Error(), 400)
+        return
 	}
-	muJobs.Unlock()
-    // params := req.URL.Query()
-    // for k, v := range params {
-    //     fmt.Println(k, " ", v)
-    // }
+	printl("Got request %v", job)
+
+	activeJob = true 
+	files := splitFile(job.Filename, nNumber)
+	workers := getAvailWorkers()
+	nextWorker = make(chan int)
+	nextJob = make(chan FileEntry)
+	finishedAll = make(chan int)
+	finalTotal = 0 
+	go func(nextWorker <-chan int, nextJob <- chan FileEntry, finishedAll <-chan int, job JobRequest ) {
+		printl("Starting thread to hand out file chunks to workers")
+		Loop:
+			for {
+				select {
+				case file := <-nextJob:
+					worker_id := <- nextWorker
+					sendChunk(worker_id, file.Filename, file.Data, nNumber)
+				case <- finishedAll:
+					printl("Final total: %v", finalTotal)
+					break Loop 
+				}
+			}
+		printl("Finished handing out file chunks")
+		sendNotif(job.Worker_id, job.Filename, finalTotal)
+	}(nextWorker, nextJob, finishedAll, job)
+	nextJob <- files[0]
+	printl("available workers: %v", workers[0])
+	nextWorker <- workers[0]
 }
 
 // - Check availability of worker 
 // - Check progress of workers (github.com/cheggaaa/pb)
 func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
-	conf, err := decodeRequest(req)
+	conf, err := decodeConfig(req)
     if err != nil {
         http.Error(w, err.Error(), 400)
         return
     }
 	uid := conf.Id.UID
-	if _, ok := servers[uid]; !ok {
+	if _, ok := currentWorkers[uid]; !ok {
 		log.Fatal("Worker expired...reinitialze worker...")
 	}
-	servers[uid].heartbeat <- true 
+	currentWorkers[uid].Heartbeat <- true 
 }
 
 // - Config: worker machine includes available dependencies 
 func join(w http.ResponseWriter, req *http.Request) {
-	conf, err := decodeRequest(req) 
+	conf, err := decodeConfig(req) 
 	ip, _ := getIP(req)
     if err != nil {
         http.Error(w, err.Error(), 400)
         return
     }
 	uid := conf.Id.UID
-	if _, ok := servers[uid]; ok {
+	if _, ok := currentWorkers[uid]; ok {
 		log.Fatal("Intiailzing a worker that exists...")
 	}
 
@@ -121,37 +208,66 @@ func join(w http.ResponseWriter, req *http.Request) {
 //
 func sendHeartbeat() {
 	for {
-		muServers.Lock()
-		for worker := range servers {
+		muWorkers.Lock()
+		for worker := range currentWorkers {
 			go func(worker *WorkerState) {
-				printl("Pinging worker %v at ip %v", worker.workerId, worker.url)
+				printl("Pinging worker %v at ip %v", worker.WorkerId, worker.Ip)
 				url := "http://127.0.0.1:8081/w_heartbeat"
 				http.Get(url)
-			} (servers[worker])
+			} (currentWorkers[worker])
 		}
-		muServers.Unlock()
+		muWorkers.Unlock()
 		time.Sleep(3 * time.Second)
 	}
 }
 
-// func currentServers() [] int {
-// 	muServers.Lock()
-// 	servers := make([]int, len(servers))
-// 	muServers.Unlock()
-// 	i := 0 
-// 	for key := range servers {
-// 		servers[i] = key 
-// 	worker.	i++
-// 	}
-// 	return servers 
-// }
+func sendChunk(worker_id int, file_id string, file string, file_size int) {
+	muJobs.Lock()
+	job := WorkerProgress{file_id, 0, file_size}
+	currentJobs[worker_id] = &job
+	muJobs.Unlock()
 
+	jobArgs := JobArgs{worker_id, file_id, file}
 
-//
-// Internal Functions 
-//
+	muWorkers.Lock()
+	go func(worker *WorkerState, jobArgs *JobArgs) {
+		printl("Sending file chunk %v to worker %v", file_id , worker_id)
+		url := "http://127.0.0.1:8081/process_chunk"
+		b := new(bytes.Buffer)
+		json.NewEncoder(b).Encode(&jobArgs)
+		http.Post(url,"application/json; charset=utf-8", b)
+	}(currentWorkers[worker_id], &jobArgs)
+	muWorkers.Unlock()
+}
 
-// https://blog.golang.org/context/userip/userip.go
+func sendNotif(worker_id int, filename string, result int) {
+	job := JobRequest{filename, worker_id}
+	printl("Notifying worker %v that file %v has %v words", worker_id, filename, result) 
+	url := "http://127.0.0.1:8081/finish_job"
+	b := new(bytes.Buffer)
+	json.NewEncoder(b).Encode(&job)
+	http.Post(url,"application/json; charset=utf-8", b)
+}
+
+//					  //
+// Internal Functions //
+//					  //
+func addWorker(worker_id int) {
+
+}
+
+func readWorker(worker_id int) {
+
+}
+
+func getAvailWorkers() []int {
+	workers := make([]int,0, len(currentWorkers))	
+	for worker := range currentWorkers {
+		workers = append(workers, currentWorkers[worker].WorkerId)
+	}
+	printl("Workers: %v", workers)
+	return workers 
+}
 func getIP(req *http.Request) (net.IP, error) {
     ip, _, err := net.SplitHostPort(req.RemoteAddr)
     if err != nil {
@@ -164,7 +280,19 @@ func getIP(req *http.Request) (net.IP, error) {
     return userIP, nil
 }
 
-func decodeRequest(req *http.Request) (config.Configuration, error) {
+func decodeRequest(req *http.Request) (JobRequest, error) {
+	var request JobRequest
+    err := json.NewDecoder(req.Body).Decode(&request)
+	return request, err
+}
+
+func decodeJob(req *http.Request) (JobReply, error) {
+    var job JobReply
+    err := json.NewDecoder(req.Body).Decode(&job)
+	return job, err
+}
+
+func decodeConfig(req *http.Request) (config.Configuration, error) {
     var conf config.Configuration
     err := json.NewDecoder(req.Body).Decode(&conf)
 	return conf, err
@@ -183,6 +311,57 @@ func setTimer(command string, length int, timeout *time.Timer) *time.Timer {
 	return timeout 
 }
 
+
+func splitFile(filename string, file_length int) []FileEntry {    
+	var names []FileEntry
+	file_input, err := os.Open(filename)
+	reader:= bufio.NewReader(file_input)
+	file_count := 0 
+	line_count := 0
+
+	names = append(names, FileEntry{fmt.Sprintf(filename + "-%d.txt", file_count), ""}) 
+	file, err := os.Create(names[file_count].Filename)
+	if err != nil {                
+		log.Fatal("mkInput: ", err)
+	}                              
+	w := bufio.NewWriter(file)     
+	line, err := reader.ReadString('\n')
+
+	for {
+		w.WriteString(line)
+		names[file_count].Data += line 
+		line_count++
+
+		// Create new file when line limit per file is reached 
+		if line_count % file_length == 0 {
+			w.Flush()
+			file.Close()
+
+			file_count++
+			names = append(names, FileEntry{fmt.Sprintf("filename-%d.txt", file_count),""}) 
+			file, err = os.Create(names[file_count].Filename)
+			if err != nil {                
+				log.Fatal("mkInput: ", err)
+			}                              
+			w = bufio.NewWriter(file)     
+		}
+
+		line, err = reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+	}
+
+	// Close last file 
+	if line_count % file_length != 0 {
+		w.Flush()
+		file.Close()
+	}
+	file_input.Close()
+
+	return names 
+
+ }           
 // Run a thread for handling expired workers 
 func notifyExpired() {
 	for {
@@ -194,43 +373,44 @@ func notifyExpired() {
 }
 
 func initializeMaster() {
-	servers = make(map[int]*WorkerState)
+	currentWorkers = make(map[int]*WorkerState)
+	currentJobs = make(map[int]*WorkerProgress)
 	expiredServers = make(chan int) 
-	activeWork = false 
+	activeJob = false 
+	finalTotal = 0
 }
 
 func initializeWorker(worker_id int, ip string) *WorkerState {
 	var init_state WorkerState  
-	init_state.workerId = worker_id
-	init_state.url = ip 
-	init_state.heartbeat = make(chan bool)
-	init_state.fail = 0 
-	init_state.active = true
+	init_state.WorkerId = worker_id
+	init_state.Ip= ip 
+	init_state.Heartbeat = make(chan bool)
+	init_state.Failures = 0 
 	
-	servers[worker_id] = &init_state
-	servers[worker_id].timeout = setTimer(create, 5, init_state.timeout)
+	currentWorkers[worker_id] = &init_state
+	currentWorkers[worker_id].Timeout = setTimer(create, 5, init_state.Timeout)
 
 	go func(server_id int, worker *WorkerState) {
 		Loop:
 			for {
 				select {
-				case <- worker.timeout.C:
-					if worker.fail < 3 {
-						printl("Failed to hear from worker %v %v time(s)", worker.workerId, worker.fail)
-						worker.timeout = setTimer(reset, 5, worker.timeout) 
-						worker.fail++
+				case <- worker.Timeout.C:
+					if worker.Failures < 3 {
+						printl("Failed to hear from worker %v %v time(s)", worker.WorkerId, worker.Failures)
+						worker.Timeout = setTimer(reset, 5, worker.Timeout) 
+						worker.Failures++
 					} else {
 						fmt.Printf("Deleting worker from active workers list\n")
-						muServers.Lock()
-						delete(servers, server_id)
-						muServers.Unlock()
+						muWorkers.Lock()
+						delete(currentWorkers, server_id)
+						muWorkers.Unlock()
 
 						expiredServers <- server_id
 						break Loop
 					}
-				case <- worker.heartbeat:
-					worker.timeout = setTimer(reset, 5, worker.timeout) 
-					worker.fail = 0 
+				case <- worker.Heartbeat:
+					worker.Timeout = setTimer(reset, 5, worker.Timeout) 
+					worker.Failures = 0 
 				}
 			}
 	}(worker_id, &init_state)
@@ -249,8 +429,9 @@ func main() {
 	go notifyExpired()
 	go sendHeartbeat()
 
-    http.HandleFunc("/submitjob", submitJob)
+    http.HandleFunc("/job_request", submitRequest)
     http.HandleFunc("/join", join)
 	http.HandleFunc("/m_heartbeat", heartbeatHandler) 
+	http.HandleFunc("/job_chunk", chunkHandler) 
     http.ListenAndServe(":8080", nil)
 }
