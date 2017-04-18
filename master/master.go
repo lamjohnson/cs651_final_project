@@ -3,6 +3,7 @@
     authors: Justin Chen, Johnson Lam
     
     Master interface to party.
+	init_state.Port = conf.Party.Port
 
     3.7.17
 */
@@ -48,6 +49,9 @@ const nNumber = 1000
 type JobRequest struct {
 	Filename 	string
 	Worker_id 	int 
+	Ip 			string 
+	Port 		int 
+	Total		int
 }
 
 type JobArgs struct {
@@ -65,6 +69,7 @@ type JobReply struct {
 type WorkerState struct {
 	WorkerId	int
 	Ip 			string 
+	Port		int
 	Timeout		*time.Timer
 	Heartbeat 	chan bool
 	Failures 	int 
@@ -95,7 +100,6 @@ func nrand() int64 {
 //
 // Functions for handling requests from workers 
 //
-
 // - DONE: Mark chunk of file as finished
 // - TODO: Send next chunk (do in submit job handler) 
 func chunkHandler(w http.ResponseWriter, req *http.Request) {
@@ -105,6 +109,7 @@ func chunkHandler(w http.ResponseWriter, req *http.Request) {
         return
 	}
 	finalTotal += job.Progress
+	finishedFiles++
 
 	lastProgress := currentJobs[job.Worker_id]
 	printl("Worker: %v", job.Worker_id)
@@ -116,10 +121,11 @@ func chunkHandler(w http.ResponseWriter, req *http.Request) {
 		finishedFiles++
 	}
 
-	activeJob = false
+	// activeJob = false
 	if finishedFiles == totalFiles || !activeJob {
 		//TODO: Reply to client that job has finished along with results 	
 		finishedAll <- 0
+		printl("FINISHED")
 		return
 	}
 
@@ -143,6 +149,8 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 
 	activeJob = true 
 	files := splitFile(job.Filename, nNumber)
+	totalFiles = len(files)
+	printl("There are %v files", totalFiles)
 	workers := getAvailWorkers()
 	nextWorker = make(chan int)
 	nextJob = make(chan FileEntry)
@@ -154,19 +162,30 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 			for {
 				select {
 				case file := <-nextJob:
+					printl("Waiting to send %v", file.Filename)
 					worker_id := <- nextWorker
 					sendChunk(worker_id, file.Filename, file.Data, nNumber)
+					printl("Sent file %v", file.Filename)
 				case <- finishedAll:
 					printl("Final total: %v", finalTotal)
 					break Loop 
 				}
 			}
 		printl("Finished handing out file chunks")
-		sendNotif(job.Worker_id, job.Filename, finalTotal)
+		sendNotif(job, finalTotal)
 	}(nextWorker, nextJob, finishedAll, job)
-	nextJob <- files[0]
-	printl("available workers: %v", workers[0])
-	nextWorker <- workers[0]
+	// nextJob <- files[0]
+	go func() {
+		for _, job := range files {
+			nextJob <- job
+		}
+	} () 
+	go func() {
+		for _, worker := range workers {
+			nextWorker <- worker
+		}
+	} ()
+	// nextWorker <- workers[0]
 }
 
 // - Check availability of worker 
@@ -187,7 +206,7 @@ func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
 // - Config: worker machine includes available dependencies 
 func join(w http.ResponseWriter, req *http.Request) {
 	conf, err := decodeConfig(req) 
-	ip, _ := getIP(req)
+	// ip, _ := getIP(req)
     if err != nil {
         http.Error(w, err.Error(), 400)
         return
@@ -198,7 +217,7 @@ func join(w http.ResponseWriter, req *http.Request) {
 	}
 
 	fmt.Printf("Worker %v joining master\n", conf.Id.Alias)
-	initializeWorker(uid, ip.String())
+	initializeWorker(conf)
 
     // Receipt for client joining the party
     io.WriteString(w, "Welcome to the party, "+conf.Id.Alias+"\n")
@@ -211,8 +230,9 @@ func sendHeartbeat() {
 		muWorkers.Lock()
 		for worker := range currentWorkers {
 			go func(worker *WorkerState) {
-				printl("Pinging worker %v at ip %v", worker.WorkerId, worker.Ip)
-				url := "http://127.0.0.1:8081/w_heartbeat"
+				base := fmt.Sprintf("http://%v:%v", worker.Ip, worker.Port)
+				url := base + "/w_heartbeat"
+				printl("Pinging worker %v at %v", worker.WorkerId, url)
 				http.Get(url)
 			} (currentWorkers[worker])
 		}
@@ -232,7 +252,8 @@ func sendChunk(worker_id int, file_id string, file string, file_size int) {
 	muWorkers.Lock()
 	go func(worker *WorkerState, jobArgs *JobArgs) {
 		printl("Sending file chunk %v to worker %v", file_id , worker_id)
-		url := "http://127.0.0.1:8081/process_chunk"
+		base := fmt.Sprintf("http://%v:%v", worker.Ip, worker.Port)
+		url := base + "/process_chunk"
 		b := new(bytes.Buffer)
 		json.NewEncoder(b).Encode(&jobArgs)
 		http.Post(url,"application/json; charset=utf-8", b)
@@ -240,12 +261,13 @@ func sendChunk(worker_id int, file_id string, file string, file_size int) {
 	muWorkers.Unlock()
 }
 
-func sendNotif(worker_id int, filename string, result int) {
-	job := JobRequest{filename, worker_id}
-	printl("Notifying worker %v that file %v has %v words", worker_id, filename, result) 
-	url := "http://127.0.0.1:8081/finish_job"
+func sendNotif(request JobRequest, result int) {
+	base := fmt.Sprintf("http://%v:%v", request.Ip, request.Port)
+	url := base + "/finish_job"
+	request.Total = result
+	printl("Notifying worker %v that file %v has %v words at url %v", request.Worker_id, request.Filename, request.Total, url) 
 	b := new(bytes.Buffer)
-	json.NewEncoder(b).Encode(&job)
+	json.NewEncoder(b).Encode(&request)
 	http.Post(url,"application/json; charset=utf-8", b)
 }
 
@@ -268,6 +290,7 @@ func getAvailWorkers() []int {
 	printl("Workers: %v", workers)
 	return workers 
 }
+
 func getIP(req *http.Request) (net.IP, error) {
     ip, _, err := net.SplitHostPort(req.RemoteAddr)
     if err != nil {
@@ -378,17 +401,19 @@ func initializeMaster() {
 	expiredServers = make(chan int) 
 	activeJob = false 
 	finalTotal = 0
+	finishedFiles = 0
 }
 
-func initializeWorker(worker_id int, ip string) *WorkerState {
+func initializeWorker(conf config.Configuration ) *WorkerState {
 	var init_state WorkerState  
-	init_state.WorkerId = worker_id
-	init_state.Ip= ip 
+	init_state.WorkerId = conf.Id.UID
+	init_state.Ip= conf.Party.IP
+	init_state.Port = conf.Party.Port
 	init_state.Heartbeat = make(chan bool)
 	init_state.Failures = 0 
 	
-	currentWorkers[worker_id] = &init_state
-	currentWorkers[worker_id].Timeout = setTimer(create, 5, init_state.Timeout)
+	currentWorkers[init_state.WorkerId] = &init_state
+	currentWorkers[init_state.WorkerId].Timeout = setTimer(create, 5, init_state.Timeout)
 
 	go func(server_id int, worker *WorkerState) {
 		Loop:
@@ -413,7 +438,7 @@ func initializeWorker(worker_id int, ip string) *WorkerState {
 					worker.Failures = 0 
 				}
 			}
-	}(worker_id, &init_state)
+	}(init_state.WorkerId, &init_state)
 
 	return &init_state 
 }

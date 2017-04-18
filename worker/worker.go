@@ -27,8 +27,8 @@ import (
 var worker workerState
 
 type workerState struct {
-	conf	config.Configuration	
-	quit 	chan int 
+	Conf	config.Configuration	
+	Quit 	chan int 
 }
 
 type Job struct {
@@ -46,6 +46,9 @@ type JobMaster struct {
 type JobRequest struct {
 	Filename 	string 
 	Worker_id 	int
+	Ip			string
+	Port 		int
+	Total 		int 
 }
 
 //
@@ -81,7 +84,7 @@ func finishJobHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), 400) 
 		return
 	}
-	printl("Finished file %v", job.Filename)
+	printl("Finished file %v with result %v", job.Filename, job.Total)
 }
 
 // - Ping availability 
@@ -89,7 +92,7 @@ func finishJobHandler(w http.ResponseWriter, req *http.Request) {
 // TODO: Check request came from master 
 func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
 	time.Sleep(10 * time.Millisecond)
-	NotifyParty(&worker.conf)
+	NotifyParty(&worker.Conf)
 }
 
 
@@ -115,7 +118,7 @@ func NotifyParty(conf *config.Configuration) {
 func SubmitRequest() {
 	url := "http://127.0.0.1:8080/job_request"
     b := new(bytes.Buffer)
-	request := JobRequest {"book.txt", worker.conf.Id.UID}
+	request := JobRequest {"book.txt", worker.Conf.Id.UID, worker.Conf.Party.IP, worker.Conf.Party.Port, 0}
     json.NewEncoder(b).Encode(&request)
     res, _ := http.Post(url, "application/json; charset=utf-8", b)
     io.Copy(os.Stdout, res.Body)
@@ -144,12 +147,12 @@ func printl(format string, a ...interface{}) {
 }
 func makeClient() workerState {
 	worker := workerState{}
-	worker.conf = config.Configuration{}
-	worker.quit = make(chan int)
+	worker.Conf = config.Configuration{}
+	worker.Quit = make(chan int)
 
 	cfile   := "config.json"
-	worker.conf.Load(cfile)
-	worker.conf.Id.UID = int(nrand())
+	worker.Conf.Load(cfile)
+	worker.Conf.Id.UID = int(nrand())
 	return worker
 }
 
@@ -169,20 +172,24 @@ func decodeJob(req *http.Request) (Job, error) {
 
 func main () { 
 	worker = makeClient()
-	conf := worker.conf
+	conf := worker.Conf
+	ip := conf.Party.IP
+	port := conf.Party.Port
 
 	// Already joined a party
 	if len(conf.Party.IP) > 0 && conf.Party.Port > 0 && len(conf.Party.Alias) > 0 {
 		fmt.Println(conf.Party)
 		JoinParty(&conf)
 	} else {
-		fmt.Println("specify party8888 to join and complete config...")
+		fmt.Println("specify party to join and complete config...")
 	}
 
 	http.HandleFunc("/w_heartbeat", heartbeatHandler) 
 	http.HandleFunc("/process_chunk", processChunkHandler)
 	http.HandleFunc("/finish_job", finishJobHandler)
-	go http.ListenAndServe(":8081", nil)
+	printl("listening on ip %v port %v", ip, port)
+	listen_port := fmt.Sprintf(":%v", port)
+	go http.ListenAndServe(listen_port, nil)
 
 	reader := bufio.NewReader(os.Stdin) 
 	Loop:
