@@ -33,8 +33,14 @@ type workerState struct {
 
 type Job struct {
 	Worker_id 	int
-	File_id 	string
-	File 		string
+	File 		FileEntry
+	// File_id 	string
+	// File 		string
+}
+
+type FileEntry struct {
+	Filename 	string
+	Data 		string
 }
 
 type JobMaster struct {
@@ -63,16 +69,17 @@ func processChunkHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), 400) 
 		return
 	}
-	printl("Got job for file %v", job.File_id)
+	printl("Got job for file %v", job.File.Filename)
 
+	time.Sleep(1 * time.Second)
 	count := 0 
-	for range job.File {
+	for range job.File.Data {
 		count += 1
-		// time.Sleep(10 * time.Millisecond)
+		// time.Sleep(1 * time.Millisecond)
 	}
 	printl("Got result: %v", count )
 
-	result := JobMaster{job.Worker_id, job.File_id, count}
+	result := JobMaster{job.Worker_id, job.File.Filename , count}
 	printl("Sending result back: %v worker %v", result, job.Worker_id)
 	sendJobResult(&result)
 }
@@ -150,7 +157,7 @@ func makeClient() workerState {
 	worker.Conf = config.Configuration{}
 	worker.Quit = make(chan int)
 
-	cfile   := "config.json"
+	cfile   := "config2.json"
 	worker.Conf.Load(cfile)
 	worker.Conf.Id.UID = int(nrand())
 	return worker

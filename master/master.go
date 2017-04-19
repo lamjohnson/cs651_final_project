@@ -3,9 +3,9 @@
     authors: Justin Chen, Johnson Lam
     
     Master interface to party.
-	init_state.Port = conf.Party.Port
 
-    3.7.17
+    4.19.17
+	Currently implements word count. Future work to be done to extend functionality.
 */
 
 package main
@@ -22,30 +22,31 @@ import (
 	"time" 
 	"log"
 	"sync"
-	"crypto/rand"
-	"math/big"
 	"bytes"
-	// "strings"
 )
-
-var expiredServers 	chan int 
-var currentWorkers	map[int]*WorkerState //key: worker_id
-var currentJobs 	map[int]*WorkerProgress //key: worker_id
-var activeJob	 	bool 
-var totalFiles 		int 
-var finishedFiles 	int 
-var muWorkers		sync.Mutex
-var muJobs			sync.Mutex
-var nextWorker 		chan int
-var nextJob 		chan FileEntry
-var finishedAll 	chan int
-var finalTotal 		int 
 
 const create = "create"
 const reset	 = "reset"
 const close  = "close"
-const nNumber = 1000
+const fileSize = 1000
 
+// TODO: Move into master struct and instantiate a master state instance 
+var currentWorkers	map[int]*WorkerState //key: worker_id
+var currentJobs 	map[int]*WorkerProgress //key: worker_id
+var totalFiles 		int 
+var finishedFiles 	int 
+var finalTotal 		int 
+
+var muWorkers		sync.Mutex
+var muJobs			sync.Mutex
+var muActive		sync.Mutex
+var nextWorker 		chan int
+var nextJob 		chan FileEntry
+var activeJob	 	bool 
+var finishedAll 	chan int
+
+
+// initial job request
 type JobRequest struct {
 	Filename 	string
 	Worker_id 	int 
@@ -54,18 +55,25 @@ type JobRequest struct {
 	Total		int
 }
 
+// file chunk sent to worker
 type JobArgs struct {
 	Worker_id 	int
-	File_id  	string	
-	File 		string 
+	File 		FileEntry
 }
 
+// worker reply for file chunk
 type JobReply struct {
 	Worker_id 	int 
 	File_id 	string	
 	Progress 	int 
 }
 
+// TODO: Create master object and associate functions with this type
+type MasterState struct {
+	
+}
+
+// TODO: Associate functions with this type
 type WorkerState struct {
 	WorkerId	int
 	Ip 			string 
@@ -75,14 +83,11 @@ type WorkerState struct {
 	Failures 	int 
 }
 
+// worker to file progress 
 type WorkerProgress struct {
-	file_id 	string
+	file 		FileEntry	
 	progress 	int 
 	total		int 
-}
-
-type MasterState struct {
-	
 }
 
 type FileEntry struct {
@@ -90,18 +95,9 @@ type FileEntry struct {
 	Data 		string
 }
 
-func nrand() int64 {
-	max := big.NewInt(int64(1) << 62)
-	bigx, _ := rand.Int(rand.Reader, max)
-	x := bigx.Int64()
-	return x
-}
-
 //
 // Functions for handling requests from workers 
 //
-// - DONE: Mark chunk of file as finished
-// - TODO: Send next chunk (do in submit job handler) 
 func chunkHandler(w http.ResponseWriter, req *http.Request) {
 	job, err :=  decodeJob(req) 
     if err != nil {
@@ -109,23 +105,29 @@ func chunkHandler(w http.ResponseWriter, req *http.Request) {
         return
 	}
 	finalTotal += job.Progress
-	finishedFiles++
-
 	lastProgress := currentJobs[job.Worker_id]
-	printl("Worker: %v", job.Worker_id)
-	printl("Current job progress: %v", currentJobs)
-	if lastProgress.file_id == job.File_id {
-		printl("Found job in current jobs")
+	lastProgress.progress += job.Progress
+	printl("Worker %v finished job with progress %v out of %v", job.Worker_id, lastProgress.progress, lastProgress.total)
+
+	// TODO: Not sure if need check reply received matches work given 
+	if lastProgress.file.Filename == job.File_id {
+		printl("Removing active job")
 		delete(currentJobs, job.Worker_id)
 		os.Remove(job.File_id) 
 		finishedFiles++
 	}
 
-	// activeJob = false
-	if finishedFiles == totalFiles || !activeJob {
-		//TODO: Reply to client that job has finished along with results 	
+	// TODO: Think of smarter way to check that job is complete. Maybe use a map?
+	if finishedFiles == totalFiles {
+		finishedFiles = 0
+		// Check: Is it necessary to check for lingering jobs. Why would there be any?
+		if len(currentJobs) > 0 {
+			for k := range currentJobs {
+				delete(currentJobs, k)
+			}
+		}
+		changeStatus(false)
 		finishedAll <- 0
-		printl("FINISHED")
 		return
 	}
 
@@ -134,28 +136,31 @@ func chunkHandler(w http.ResponseWriter, req *http.Request) {
 	} (job.Worker_id)
 }
 
-// look at mapreduce code 
-// - No need to specify work type, assume word count 
-//     - Later on specify type of work to be done 
-// - Include file or filename url to retreive 
-// - Divide up file into chunks and send to workers 
+// TODO: Include file or filename url to retreive 
+// TODO: Reject if there is an active job 
+// - Later on specify type of work to be done 
 func submitRequest(w http.ResponseWriter, req *http.Request) {
 	job, err := decodeRequest(req)
 	if err != nil {
         http.Error(w, err.Error(), 400)
         return
 	}
-	printl("Got request %v", job)
-
-	activeJob = true 
-	files := splitFile(job.Filename, nNumber)
-	totalFiles = len(files)
-	printl("There are %v files", totalFiles)
+	ok := changeStatus(true)
+	if !ok {
+		// Reply to client that you're busy
+		return 
+	}
+	finalTotal = 0 
+	files := splitFile(job.Filename, fileSize)
 	workers := getAvailWorkers()
 	nextWorker = make(chan int)
 	nextJob = make(chan FileEntry)
 	finishedAll = make(chan int)
-	finalTotal = 0 
+
+	printl("Got request %v from worker %v", job, job.Worker_id)
+	printl("There are %v files", totalFiles)
+
+	// Handout jobs accordingly 
 	go func(nextWorker <-chan int, nextJob <- chan FileEntry, finishedAll <-chan int, job JobRequest ) {
 		printl("Starting thread to hand out file chunks to workers")
 		Loop:
@@ -164,17 +169,18 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 				case file := <-nextJob:
 					printl("Waiting to send %v", file.Filename)
 					worker_id := <- nextWorker
-					sendChunk(worker_id, file.Filename, file.Data, nNumber)
+					sendChunk(worker_id, file, fileSize)
 					printl("Sent file %v", file.Filename)
 				case <- finishedAll:
-					printl("Final total: %v", finalTotal)
+					printl("Finished job, final total: %v", finalTotal)
 					break Loop 
 				}
 			}
 		printl("Finished handing out file chunks")
 		sendNotif(job, finalTotal)
 	}(nextWorker, nextJob, finishedAll, job)
-	// nextJob <- files[0]
+
+	// Treating channel as a queue to put jobs and workers available 
 	go func() {
 		for _, job := range files {
 			nextJob <- job
@@ -185,11 +191,10 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 			nextWorker <- worker
 		}
 	} ()
-	// nextWorker <- workers[0]
 }
 
-// - Check availability of worker 
-// - Check progress of workers (github.com/cheggaaa/pb)
+// TODO: Check progress of workers and update currentJobs accordingly 
+// 		- Fun visualization: github.com/cheggaaa/pb
 func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
 	conf, err := decodeConfig(req)
     if err != nil {
@@ -200,13 +205,12 @@ func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
 	if _, ok := currentWorkers[uid]; !ok {
 		log.Fatal("Worker expired...reinitialze worker...")
 	}
+
 	currentWorkers[uid].Heartbeat <- true 
 }
 
-// - Config: worker machine includes available dependencies 
 func join(w http.ResponseWriter, req *http.Request) {
 	conf, err := decodeConfig(req) 
-	// ip, _ := getIP(req)
     if err != nil {
         http.Error(w, err.Error(), 400)
         return
@@ -216,12 +220,22 @@ func join(w http.ResponseWriter, req *http.Request) {
 		log.Fatal("Intiailzing a worker that exists...")
 	}
 
-	fmt.Printf("Worker %v joining master\n", conf.Id.Alias)
+	printl("Worker %v joining master\n", conf.Id.Alias)
 	initializeWorker(conf)
+
+	// add worker to queue if there is an active job 
+	muActive.Lock()
+	if activeJob {
+		go func() {
+			nextWorker <- uid
+		} ()
+	}
+	muActive.Unlock()
 
     // Receipt for client joining the party
     io.WriteString(w, "Welcome to the party, "+conf.Id.Alias+"\n")
 }
+
 //
 // Functions for sending requests to worker 
 //
@@ -241,19 +255,19 @@ func sendHeartbeat() {
 	}
 }
 
-func sendChunk(worker_id int, file_id string, file string, file_size int) {
+func sendChunk(worker_id int, file FileEntry, file_size int) {
 	muJobs.Lock()
-	job := WorkerProgress{file_id, 0, file_size}
-	currentJobs[worker_id] = &job
-	muJobs.Unlock()
+	job := WorkerProgress{file, 0, file_size}
+	currentJobs[worker_id] = &job 
+	muJobs.Unlock() 
 
-	jobArgs := JobArgs{worker_id, file_id, file}
+	jobArgs := JobArgs{worker_id, file} 
 
 	muWorkers.Lock()
 	go func(worker *WorkerState, jobArgs *JobArgs) {
-		printl("Sending file chunk %v to worker %v", file_id , worker_id)
 		base := fmt.Sprintf("http://%v:%v", worker.Ip, worker.Port)
 		url := base + "/process_chunk"
+		printl("Sending file chunk %v to worker %v at url %v", file.Filename, worker_id, url)
 		b := new(bytes.Buffer)
 		json.NewEncoder(b).Encode(&jobArgs)
 		http.Post(url,"application/json; charset=utf-8", b)
@@ -274,12 +288,15 @@ func sendNotif(request JobRequest, result int) {
 //					  //
 // Internal Functions //
 //					  //
-func addWorker(worker_id int) {
-
-}
-
-func readWorker(worker_id int) {
-
+func changeStatus(active bool) bool {
+	muActive.Lock()
+	if (active && !activeJob) || !active {
+		activeJob = active
+		muActive.Unlock()
+		return true
+	}
+	muActive.Unlock()
+	return false
 }
 
 func getAvailWorkers() []int {
@@ -382,23 +399,14 @@ func splitFile(filename string, file_length int) []FileEntry {
 	}
 	file_input.Close()
 
+	totalFiles = len(names)
 	return names 
 
  }           
-// Run a thread for handling expired workers 
-func notifyExpired() {
-	for {
-		select {
-		case server_id := <- expiredServers:
-			fmt.Printf("Timer expired on worker %v\n", server_id)
-		} 
-	}
-}
 
 func initializeMaster() {
 	currentWorkers = make(map[int]*WorkerState)
 	currentJobs = make(map[int]*WorkerProgress)
-	expiredServers = make(chan int) 
 	activeJob = false 
 	finalTotal = 0
 	finishedFiles = 0
@@ -420,17 +428,27 @@ func initializeWorker(conf config.Configuration ) *WorkerState {
 			for {
 				select {
 				case <- worker.Timeout.C:
-					if worker.Failures < 3 {
+					muJobs.Lock()
+					w, active := currentJobs[worker.WorkerId]
+					muJobs.Unlock()
+
+					if worker.Failures < 3 && !active {
 						printl("Failed to hear from worker %v %v time(s)", worker.WorkerId, worker.Failures)
 						worker.Timeout = setTimer(reset, 5, worker.Timeout) 
 						worker.Failures++
 					} else {
-						fmt.Printf("Deleting worker from active workers list\n")
+						if active {
+							printl("Adding unfinished job %v to queue", w.file.Filename)
+							go func() {
+								nextJob <- w.file
+							} ()
+						}
+
+						printl("Deleting worker %v from active workers list\n", worker.WorkerId)
 						muWorkers.Lock()
 						delete(currentWorkers, server_id)
 						muWorkers.Unlock()
-
-						expiredServers <- server_id
+						printl("Timer expired on worker %v\n", server_id)
 						break Loop
 					}
 				case <- worker.Heartbeat:
@@ -444,14 +462,13 @@ func initializeWorker(conf config.Configuration ) *WorkerState {
 }
 
 func printl(format string, a ...interface{}) {
-	fmt.Printf(format + "\n", a...)
+	log.Printf(format + "\n", a...)
 }
 
 func main() {
-	fmt.Println("Listening on port 8080...")
+	printl("Listening on port 8080...")
 	initializeMaster()
 
-	go notifyExpired()
 	go sendHeartbeat()
 
     http.HandleFunc("/job_request", submitRequest)
