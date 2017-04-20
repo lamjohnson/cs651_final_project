@@ -51,6 +51,7 @@ type JobMaster struct {
 
 type JobRequest struct {
 	Filename 	string 
+	Url 		string
 	Worker_id 	int
 	Ip			string
 	Port 		int
@@ -73,7 +74,8 @@ func processChunkHandler(w http.ResponseWriter, req *http.Request) {
 
 	time.Sleep(1 * time.Second)
 	count := 0 
-	for range job.File.Data {
+	words := strings.Fields(job.File.Data)
+	for range words {
 		count += 1
 		// time.Sleep(1 * time.Millisecond)
 	}
@@ -122,12 +124,16 @@ func NotifyParty(conf *config.Configuration) {
     io.Copy(os.Stdout, res.Body)
 }
 
-func SubmitRequest() {
+func SubmitRequest(text_url string) {
 	url := "http://127.0.0.1:8080/job_request"
     b := new(bytes.Buffer)
-	request := JobRequest {"book.txt", worker.Conf.Id.UID, worker.Conf.Party.IP, worker.Conf.Party.Port, 0}
+	request := JobRequest {"book.txt", text_url, worker.Conf.Id.UID, worker.Conf.Party.IP, worker.Conf.Party.Port, 0}
     json.NewEncoder(b).Encode(&request)
-    res, _ := http.Post(url, "application/json; charset=utf-8", b)
+    res, err := http.Post(url, "application/json; charset=utf-8", b)
+	if err != nil {
+		printl("Network error, please try submitting again")
+		return
+	}
     io.Copy(os.Stdout, res.Body)
 }
 
@@ -175,6 +181,11 @@ func decodeJob(req *http.Request) (Job, error) {
 	return job, err 
 }
 
+func readUserInput(reader *bufio.Reader) string {
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimRight(input,"\n")
+	return input
+}
 
 
 func main () { 
@@ -202,14 +213,15 @@ func main () {
 	Loop:
 		for {
 			fmt.Print("Hi, what would you like to do?\n")
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimRight(input,"\n")
+			input := readUserInput(reader)
 
 			switch input {
 			case "quit":
 				break Loop
 			case "submit":
-				SubmitRequest()
+				fmt.Print("Please specify a URL\n")
+				input := readUserInput(reader)
+				SubmitRequest(input)
 			default:
 				printl("Please choose one of the following options: Quit or Submit job")
 			}

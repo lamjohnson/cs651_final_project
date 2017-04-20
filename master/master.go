@@ -49,6 +49,7 @@ var finishedAll 	chan int
 // initial job request
 type JobRequest struct {
 	Filename 	string
+	Url			string
 	Worker_id 	int 
 	Ip 			string 
 	Port 		int 
@@ -148,9 +149,16 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 	ok := changeStatus(true)
 	if !ok {
 		// Reply to client that you're busy
+    	io.WriteString(w, "Master is currently busy with a request, please try again later...\n")
 		return 
 	}
+    io.WriteString(w, "Request submitted successfully, processing...\n")
 	finalTotal = 0 
+	download_err := downloadFile( job.Filename, job.Url)
+	if download_err != nil {
+		io.WriteString(w, fmt.Sprintf("Error %v with downloading file, please try again\n", download_err))
+		return
+	}
 	files := splitFile(job.Filename, fileSize)
 	workers := getAvailWorkers()
 	nextWorker = make(chan int)
@@ -192,6 +200,7 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 		}
 	} ()
 }
+
 
 // TODO: Check progress of workers and update currentJobs accordingly 
 // 		- Fun visualization: github.com/cheggaaa/pb
@@ -282,12 +291,43 @@ func sendNotif(request JobRequest, result int) {
 	printl("Notifying worker %v that file %v has %v words at url %v", request.Worker_id, request.Filename, request.Total, url) 
 	b := new(bytes.Buffer)
 	json.NewEncoder(b).Encode(&request)
-	http.Post(url,"application/json; charset=utf-8", b)
+	_, err := http.Post(url,"application/json; charset=utf-8", b)
+	if err != nil {
+		time.Sleep(1 * time.Second)
+		sendNotif(request, result)
+	}
 }
 
 //					  //
 // Internal Functions //
 //					  //
+
+func downloadFile(filepath string, url string) error {
+	// Create file
+	out, err := os.Create(filepath)
+	if err != nil {
+		printl("error 1")
+		return err 
+	}
+	defer out.Close()
+
+	// Get data
+	resp, err := http.Get(url)
+	if err != nil {
+		printl("error 2 %v", url)
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Write data to file 
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		printl("error 3")
+		return err
+	}
+
+	return nil
+}
 func changeStatus(active bool) bool {
 	muActive.Lock()
 	if (active && !activeJob) || !active {
