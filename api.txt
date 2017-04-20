@@ -1,0 +1,29 @@
+MASTER 
+1) /join
+    - Config: worker machine includes available dependencies 
+
+2) /heartbeat 
+    - Check availability of worker 
+    - Check progress of workers (github.com/cheggaaa/pb)
+
+3) /submitjob
+    - No need to specify work type, assume word count 
+        - Later on specify type of work to be done 
+    - Include file or filename url to retreive 
+    - Divide up file into chunks and send to workers 
+
+4) /finishchunk 
+    - Mark chunk of file as finished, send next chunk 
+    
+
+WORKER 
+1) /heartbeat 
+    - Ping availability 
+    - Ping current progress if any 
+
+2) /processchunk
+    - Work on a file chunk 
+    - Process jobs that worker has dependencies for 
+
+3) /finishjob 
+    - Notify app/client job is finished 
