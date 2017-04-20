@@ -33,12 +33,12 @@ $ go run worker.go
 Todo in order of priority:
 - Host Master and Worker on server (get routing working for ip addresses/ports on external network) 
 - Take care of networks errors (worker and master side) 
-- Script to automatically lauch worker when computer turns on
 - Add fault tolerance in case master get K.O.'d in which case another server should assume role of master (use raft) 
 - Workers shoud track the state of their jobs and periodically ping their progress to the master often enough so that the master can compensate if something happens to that worker
 
 
 Secondary:
+- Script to automatically lauch worker when computer turns on
 - Worker should have a standard form for submitting jobs containing the data source, data type, dataset size, comment about job, which master can disseminate to other workers
 - Master should allocate appropriately sized jobs to each worker based on their configurations submitted when they last joined the current session
 - Master should divide dataset up into cunks and tell each worker where in the byte stream to start reading (not sure if this will be our exact approach. I guess we'll find out...) 

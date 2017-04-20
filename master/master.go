@@ -181,6 +181,7 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 					printl("Sent file %v", file.Filename)
 				case <- finishedAll:
 					printl("Finished job, final total: %v", finalTotal)
+					os.Remove(job.Filename) 
 					break Loop 
 				}
 			}
@@ -455,8 +456,8 @@ func initializeMaster() {
 func initializeWorker(conf config.Configuration ) *WorkerState {
 	var init_state WorkerState  
 	init_state.WorkerId = conf.Id.UID
-	init_state.Ip= conf.Party.IP
-	init_state.Port = conf.Party.Port
+	init_state.Ip= conf.Id.IP
+	init_state.Port = conf.Id.Port
 	init_state.Heartbeat = make(chan bool)
 	init_state.Failures = 0 
 	

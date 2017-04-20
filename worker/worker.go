@@ -73,17 +73,17 @@ func processChunkHandler(w http.ResponseWriter, req *http.Request) {
 	printl("Got job for file %v", job.File.Filename)
 
 	time.Sleep(1 * time.Second)
-	count := 0 
+	wc := 0 
 	words := strings.Fields(job.File.Data)
 	for range words {
-		count += 1
+		wc += 1
 		// time.Sleep(1 * time.Millisecond)
 	}
-	printl("Got result: %v", count )
+	printl("Got result: %v", wc )
 
-	result := JobMaster{job.Worker_id, job.File.Filename , count}
+	result := JobMaster{job.Worker_id, job.File.Filename , wc }
 	printl("Sending result back: %v worker %v", result, job.Worker_id)
-	sendJobResult(&result)
+	worker.sendJobResult(&result)
 }
 
 // - Notify app/client job is finished
@@ -101,33 +101,36 @@ func finishJobHandler(w http.ResponseWriter, req *http.Request) {
 // TODO: Check request came from master 
 func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
 	time.Sleep(10 * time.Millisecond)
-	NotifyParty(&worker.Conf)
+	worker.NotifyParty()
 }
 
 
 //
 // Functions for sending requests to master
 //
-func JoinParty(conf *config.Configuration) {
-	url := "http://127.0.0.1:8080/join"
+func (worker workerState) JoinParty() {
+	url := getUrl(worker.Conf.Party.IP, worker.Conf.Party.Port, "join")
+	// url := "http://127.0.0.1:8080/join"
     b := new(bytes.Buffer)
-    json.NewEncoder(b).Encode(conf)
+    json.NewEncoder(b).Encode(&worker.Conf)
     res, _ := http.Post(url, "application/json; charset=utf-8", b)
     io.Copy(os.Stdout, res.Body)
 }
 
-func NotifyParty(conf *config.Configuration) {
-	url := "http://127.0.0.1:8080/m_heartbeat"
+func (worker workerState) NotifyParty() {
+	url := getUrl(worker.Conf.Party.IP, worker.Conf.Party.Port, "m_heartbeat")
+	// url := "http://127.0.0.1:8080/m_heartbeat"
     b := new(bytes.Buffer)
-    json.NewEncoder(b).Encode(conf)
+    json.NewEncoder(b).Encode(&worker.Conf)
     res, _ := http.Post(url, "application/json; charset=utf-8", b)
     io.Copy(os.Stdout, res.Body)
 }
 
-func SubmitRequest(text_url string) {
-	url := "http://127.0.0.1:8080/job_request"
+func (worker workerState) SubmitRequest(filename string, text_url string) {
+	url := getUrl(worker.Conf.Party.IP, worker.Conf.Party.Port, "job_request")
+	// url := "http://127.0.0.1:8080/job_request"
     b := new(bytes.Buffer)
-	request := JobRequest {"book.txt", text_url, worker.Conf.Id.UID, worker.Conf.Party.IP, worker.Conf.Party.Port, 0}
+	request := JobRequest {filename, text_url, worker.Conf.Id.UID, worker.Conf.Id.IP, worker.Conf.Id.Port, 0}
     json.NewEncoder(b).Encode(&request)
     res, err := http.Post(url, "application/json; charset=utf-8", b)
 	if err != nil {
@@ -137,8 +140,9 @@ func SubmitRequest(text_url string) {
     io.Copy(os.Stdout, res.Body)
 }
 
-func sendJobResult(result *JobMaster) {
-	url := "http://127.0.0.1:8080/job_chunk"
+func (worker workerState) sendJobResult(result *JobMaster) {
+	url := getUrl(worker.Conf.Party.IP, worker.Conf.Party.Port, "job_chunk")
+	// url := "http://127.0.0.1:8080/job_chunk"
     b := new(bytes.Buffer)
     json.NewEncoder(b).Encode(result)
     res, _ := http.Post(url, "application/json; charset=utf-8", b)
@@ -155,6 +159,11 @@ func nrand() int64 {
 	return x
 }
 
+func getUrl(base string, port int, endpoint string) string {
+	url := fmt.Sprintf("http://%v:%v/%v", base, port, endpoint)
+	return url 
+}
+
 func printl(format string, a ...interface{}) {
 	fmt.Printf(format + "\n", a...)
 }
@@ -163,7 +172,7 @@ func makeClient() workerState {
 	worker.Conf = config.Configuration{}
 	worker.Quit = make(chan int)
 
-	cfile   := "config2.json"
+	cfile   := "config1.json"
 	worker.Conf.Load(cfile)
 	worker.Conf.Id.UID = int(nrand())
 	return worker
@@ -191,13 +200,13 @@ func readUserInput(reader *bufio.Reader) string {
 func main () { 
 	worker = makeClient()
 	conf := worker.Conf
-	ip := conf.Party.IP
-	port := conf.Party.Port
+	ip := conf.Id.IP
+	port := conf.Id.Port
 
 	// Already joined a party
 	if len(conf.Party.IP) > 0 && conf.Party.Port > 0 && len(conf.Party.Alias) > 0 {
 		fmt.Println(conf.Party)
-		JoinParty(&conf)
+		worker.JoinParty()
 	} else {
 		fmt.Println("specify party to join and complete config...")
 	}
@@ -220,8 +229,10 @@ func main () {
 				break Loop
 			case "submit":
 				fmt.Print("Please specify a URL\n")
-				input := readUserInput(reader)
-				SubmitRequest(input)
+				url := readUserInput(reader)
+				fmt.Print("Please specify a filename\n")
+				filename := readUserInput(reader)
+				worker.SubmitRequest(filename, url)
 			default:
 				printl("Please choose one of the following options: Quit or Submit job")
 			}
