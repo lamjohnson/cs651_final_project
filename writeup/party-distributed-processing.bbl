@@ -1,0 +1,17 @@
+\begin{thebibliography}{1}
+
+\bibitem{mapreduce}
+Jeffrey Dean and Sanjay Ghemawat.
+\newblock Mapreduce: Simplified data processing on large clusters.
+\newblock In {\em Proceedings of the 6th Conference on Symposium on Opearting
+  Systems Design \& Implementation - Volume 6}, OSDI'04, pages 10--10,
+  Berkeley, CA, USA, 2004. USENIX Association.
+
+\bibitem{borg}
+Abhishek Verma, Luis Pedrosa, Madhukar~R. Korupolu, David Oppenheimer, Eric
+  Tune, and John Wilkes.
+\newblock Large-scale cluster management at {Google} with {Borg}.
+\newblock In {\em Proceedings of the European Conference on Computer Systems
+  (EuroSys)}, Bordeaux, France, 2015.
+
+\end{thebibliography}

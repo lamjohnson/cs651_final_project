@@ -23,6 +23,7 @@
 
 \usepackage{blindtext} % Package to generate dummy text throughout this template 
 \usepackage{graphicx}
+\usepackage{cite}
 
 \usepackage[sc]{mathpazo} % Use the Palatino font
 \usepackage[T1]{fontenc} % Use 8-bit encoding that has 256 glyphs
@@ -98,62 +99,75 @@
 %----------------------------------------------------------------------------------------
 \section{Introduction}
 \lettrine[nindent=0em,lines=3] Open source software libraries, such as TensorFlow, Torch7, and Theano, have made machine learning more accessible than ever before. However, training learning algorithms require massive datasets in the order of several gigabytes to several hundred of gigabytes, which require expensive, specialized GPUs. These models, however, can be just as effectively trained on a large number of CPUs. Cloud services provide these resources at a cost and their interfaces can be
-difficult to navigate for new users. 
+difficult to navigate for new users. \\
 
-The average computer is typically under-utilized or idle in a typical day. These available resources could be altruistically allocated to agreed party members for distributed computation. We propose an affordable and easy-to-use distributed data computation paradigm for processing datasets across a party of commodity hardware connected by the internet. Our goal is to lower the cost of entry and simplify the interface users interact with. We use the MapReduce architecture as a guide for our own
+The average computer is typically under-utilized or idle in a typical day. These available resources could be altruistically allocated to agreed party members for distributed computation. We propose an affordable and easy-to-use distributed data computation paradigm for processing datasets across a party of commodity hardware connected by the internet. Our goal is to lower the cost of entry and simplify the interface users interact with. We use the MapReduce
+\cite{mapreduce} architecture as a guide for our own
 design and implement a distributed word counter as a proof-of-concept on BU's csa servers.
 
 %------------------------------------------------
 \section{Design}
-We propose utililzing hardware owned by a trusted network, like a set of computers owned by a group of friends or a trusted organization. This can even be extended to locally connecting a group of machines that a user accumulates over the years. Our current design utilizes a "master" cloud server that will coordinate work across the party, combine intermediate results from each worker, and return the final result to the client that submitted. Each computer in this network can act a client wanting to do work or as a server available to do work for others. 
+We propose utilizing hardware owned by a trusted network, like a set of computers owned by a group of friends or a trusted organization. This can even be extended to locally connecting a group of machines that a user accumulates over the years. Our current design utilizes a "master" cloud server that will coordinate work across the party, combine intermediate results from each worker, and return the final result to the client that submitted. Each computer in this network can act a client
+wanting to do work or as a server available to do work for others. \\
 
-Each computer begins by stating their available resources (cores, RAM, etc.) and their restrictions (bandwidth) to the master server when it comes online. At any point in time a computer on the network can make a request to the master server that it'd like to do some work on a dataset and pass the dataset to the master. Similar to how the master node took care of distributing work in MapReduce, the master node in our system will distribute work amongst the available servers in the network based
-on each computer's available resources and restrictions. The bottleneck of this design will be the network speed and reliability of each computer. Given this restriction, distribution of work will be in smaller chunks such that sending data over the networkw will not be too cumbersome. The master server will be responsible for handling network failures and unresponsive or slow workers in the same way as if these servers were in the same data center. 
+Each computer begins by stating their available resources (cores, RAM, etc.) and their restrictions (bandwidth) to the master server when it comes online. At any point in time a computer on the network can make a request to the master server that it'd like to do some work on a dataset and pass the dataset to the master. Similar to how the master node took care of distributing work in MapReduce \cite{mapreduce}, the master node in our system will distribute work
+among the available servers in the network based
+on each computer's available resources and restrictions. The bottleneck of this design will be the network speed and reliability of each computer. Given this restriction, distribution of work will be in smaller chunks such that sending data over the network will not be too cumbersome. The master server will be responsible for handling network failures and unresponsive or slow workers in the same way as if these servers were in the same data center. \\
 
-Our current work achieves the abovementioned by distributing work for counting words in a large document, except it does not take into account the available resources and restrictions for a worker. A worker can come and go at any time, and work will be distributed accordingly to this dynamic network inspite of worker failure. The master keeps track of workers currently available to it by sending periodic heartbeats and removes workers from the list who are unresponsive. When
+Our current work achieves the above-mentioned by distributing work for counting words in a large document, except it does not take into account the available resources and restrictions for a worker. A worker can come and go at any time, and work will be distributed accordingly to this dynamic network inspite of worker failure. The master keeps track of workers currently available to it by sending periodic heartbeats and removes workers from the list who are unresponsive. When
 finished, the master returns the final word count to the worker that submitted the request. This implementation is currently running on csa1, csa2, csa3, and ks-sesa with csa1 being the master server. 
 %------------------------------------------------
 \section{Architecture}
-Our program is written in Go and utilizes the "net/http" package to communicate between the worker and master. The master has four endpoints: join, heartbeat, job\_request, and job\_chunk. The worker has three endpoints: heartbeat, process\_chunk, and finish\_job. 
+Our program is written in Go and utilizes the "net/http" package to communicate between the worker and master. The master has four endpoints: join, heartbeat, job\_request, and job\_chunk. The worker has three endpoints: heartbeat, process\_chunk, and finish\_job. \\
 
-When workers first come online, they notify the master they are joining the network. The worker then idles and waits for either a heartbeat or a job from the master and responds to the master accordingly. When a worker submits a request to the master, the user specifies a URL containing the text document and a name for the document. The worker contributes its resouces for work its given to do by the master. It will then be notified of the final result of its request when the master is finished distributing work. 
+When workers first come online, they notify the master they are joining the network. The worker then idles and waits for either a heartbeat or a job from the master and responds to the master accordingly. When a worker submits a request to the master, the user specifies a URL containing the text document and a name for the document. The worker contributes its resources for work its given to do by the master. It will then be notified of the final result of its request when the master is finished
+distributing work. \\
+
+\begin{figure}[h]
+\includegraphics[width=\textwidth]{distribution}
+    \caption{Heartbeating and Job Distribution Among Workers}
+    \label{fig:arch}
+\end{figure}
 
 The master handles all of the coordination on its fleet of machines. When it first boots up, it starts a thread to send periodic heartbeats to workers that have joined the party. When the master sees a new worker joining, it adds it to its map of current workers and starts a thread responsible for making sure it's responsive by using a timer. If a worker does not respond to a heartbeat, this timer will not be reset and will eventually fire. When the master receives a job
-request, it makes a GET request on the URL provided, downloads the page onto its machine, and splits the file up into 1000 line file chunks. It then distributes the file chunks to the available workers, combine their results, and returns it to the submitter
+request, it makes a GET request on the URL provided, downloads the page onto its machine, and splits the file up into 1000 line file chunks. It then distributes the file chunks to the available workers, combine their results, and returns it to the submitter. 
+The key components of our work are heartbeating and distribution of work for a request. We use heartbeating as a form of checking on the availability of workers and checking on worker progress on a file chunk. The former case is simple: if the worker is unresponsive after three timeouts, delete the worker. In the latter case, if the worker is unresponsive or fails to make satisfiable progress, delete the worker and add the file chunk back into the queue of jobs that need to be processed.
+The progress check has not been implemented yet. 
+\\
 
-The key components of our work are heartbeating and distribution of work for a request. We use heartbeating as a form of checking on the availability of workers and checking on worker progress on a file chunk. The former case is simple: if the worker is unresponsive after three timeouts, delete the worker. In the latter case, if the worker is unresponsive or fails to make satisfiable progress, delete the worker and add the file chunk back into the queue of jobs that need to be processed. 
-
-We distribute work by creating a separte thread with two channels and treat them as queues, one for jobs to be worked on and one for available and idle workers to process these jobs. We then insert the file chunks and workers into their respective queues. A third channel is used to exit this thread when all jobs have been completed, indicated by when the last file chunk is received. As mentioned earlier, a job is reinserted back into its queue if unsatisfactory progress is made by the worker and the worker is deleted. If a new worker joins in the midst of a request being processed, it adds itself to the worker queue and will
-be given a job when one becomes available. When a worker returns the result for a job, the master adds it back into the worker queue. The insertion of jobs and workers into the queue is done on separate thread to ensure that it does not block the master- adding things to the channel will be blocked if a reader is not present on the otherside. The following code illustrates this: 
-\includegraphics[width=\textwidth]{distribution}
-%------------------------------------------------
-\section{Benchmarks}
-preliminary testing 
-further rigorous testing 
-
+We distribute work by creating a separate thread with two channels and treat them as queues, one for jobs to be worked on and one for available and idle workers to process these jobs. A third channel is used to exit this thread when all jobs have been completed. We insert the file chunks and workers into their respective queues at the beginning of a request. The thread blocks until it either received a job or notification that all jobs have
+finished. In the first case, it then blocks until a worker becomes available, at which point a request is sent and the thread loops back to the beginning. In the second case, a handler for job results will indicate to the thread that all jobs have finished and the thread will proceed to exit. As mentioned earlier, a job is reinserted back into its queue if unsatisfactory progress is made by the worker and the worker is deleted. If a new worker joins in the midst of a request being processed, it adds itself to the worker queue and will
+be given a job when one becomes available. When a worker returns the result for a job, the master adds it back into the worker queue. The insertion of jobs and workers into the queue is done on separate thread to ensure that it does not block the master. Figure \ref{fig:arch} details the architecture of heartbeating and job distribution for a job request.
 
 %------------------------------------------------
 
 \section{Future Work}
-
+Although we use the MapReduce \cite{mapreduce} architecture as a guide for building out our distributed word counter, much of what is described below is borrowed from the Borg \cite{borg} paper from Google. The overarching goal is to distribute the processing of large datasets over a set of machines and achieve the highest efficiency to enable hobbyist to do computationally intensive work.
 \subsection{Functionality}
+Our current implementation handles only one request at a time. If an active job is being processed, any request submission will be rejected until it is finished. Future work can be done to serialize work for concurrent requests, or a queue can be made such that requests can be processed one at a time in the order they were received. Introducing this complexity will lessen the burden for application users to handle job submit rejections. 
+The system also does not take into account the progress workers make- it only checks whether a worker is unresponsive when given a job. Worker progress will be essential in making sure workers finish in a timely manner. Further discussion for what to do with slow workers will be needed.
+Finally, this project is only functional for counting words. Processing large datasets will be the next steps in accomplishing the motivation behind the project. 
 
 \subsection{Architecture}
+Our system still has major flaws within it. At the basic level, network errors are not handled properly and it is assumed that packets make it to their target. The project was initially written using the http package, but future iterations may use the RPC package to more easily handle such errors. When the functionality of processing large datasets is built out, the system will need to handle the requirement of available resources and restrictions  to choose which workers are most suitable for handling the job. Although our
+system is built on the idea that workers come and go, the master must be fault-tolerant. One way to achieve this is to use replicated state machines and build the master on top of the Raft system done in Lab 2. If the master goes down, another server, not a worker, can become the master. This introduces a new range of complexity, such as workers being aware of where the new master is and how the new master can pick up where the last one left off and continue work for a given job. This
+discussion will be left for the next iteration. Finally, for this system to be used in production, security features will need to be added such that only authenticated users can join a party. 
+
+%----------------------------------------------------------------------------------------
 
 %----------------------------------------------------------------------------------------
 %	REFERENCE LIST
 %----------------------------------------------------------------------------------------
 
-\begin{thebibliography}{99} % Bibliography - this is intentionally simple in this template
+% \begin{thebibliography}{99} % Bibliography - this is intentionally simple in this template
 
-\bibitem[Figueredo and Wolf, 2009]{Figueredo:2009dg}
-Figueredo, A.~J. and Wolf, P. S.~A. (2009).
-\newblock Assortative pairing and life history strategy - a cross-cultural
-  study.
-\newblock {\em Human Nature}, 20:317--330.
- 
-\end{thebibliography}
+% \bibitem[Figueredo and Wolf, 2009]{Figueredo:2009dg}
+% Figueredo, A.~J. and Wolf, P. S.~A. (2009).
+% \newblock Assortative pairing and life history strategy - a cross-cultural
+%   study.
 
-%----------------------------------------------------------------------------------------
-
+% \newblock {\em Human Nature}, 20:317--330.
+% \end{thebibliography}
+\bibliography{citations}
+\bibliographystyle{plain}
 \end{document}
