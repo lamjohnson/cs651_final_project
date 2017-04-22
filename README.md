@@ -2,7 +2,7 @@
 ### BYOB: Bring Your Own Bits
 #### Authors: Johnson Lam and Justin Chen 
 #### BUCS CS651: Distributed Systems
-#### Writeup: [Link]{https://github.com/jlam17/cs651_final_project/blob/master/writeup/party-distributed-processing.pdf}
+#### Writeup: [Link](https://github.com/jlam17/cs651_final_project/blob/master/writeup/party-distributed-processing.pdf)
 
 ### Setup for Linux and OSX
 Setup so that the worker automatically launches when the system initially starts up. This is not necessary so skip to the next step if you'd like. 
