@@ -172,9 +172,10 @@ func makeClient() workerState {
 	worker.Conf = config.Configuration{}
 	worker.Quit = make(chan int)
 
-	cfile   := "config1.json"
+	cfile   := "config.json"
 	worker.Conf.Load(cfile)
 	worker.Conf.Id.UID = int(nrand())
+	printl("Worker state %v", worker.Conf.Id.Port)
 	return worker
 }
 
