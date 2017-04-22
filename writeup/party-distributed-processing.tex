@@ -55,8 +55,8 @@
 \pagestyle{fancy} % All pages have headers and footers
 \fancyhead{} % Blank out the default header
 \fancyfoot{} % Blank out the default footer
-\fancyhead[C]{Running title $\bullet$ May 2016 $\bullet$ Vol. XXI, No. 1} % Custom header text
-\fancyfoot[RO,LE]{\thepage} % Custom footer text
+% \fancyfoot[RO,LE]{\thepage} % Custom footer text
+\cfoot{\thepage} % Custom footer text
 
 \usepackage{titling} % Customizing the title section
 
@@ -83,7 +83,7 @@
 \date{\today} % Leave empty to omit a date
 \renewcommand{\maketitlehookd}{%
 \begin{abstract}
-\noindent In the past few years, machine learning and deep learning have burgeoned from theoretical research to hobbyist computing. Training algorithms require extremely large datasets and users without access to large amounts of resources must purchase them from cloud services, such as AWS, which can be extremely expensive over time. We propose an alternative solution using commodity hardware spread across the internet to tackle this barrier to entry. This could allow any user the opportunity to do computationally intensive work 
+\noindent In the past few years, machine learning and deep learning have burgeoned from theoretical research to hobbyist computing. Training algorithms require extremely large datasets and users without access to large amounts of resources must purchase them from cloud services, such as AWS, which can be expensive over time. We propose an alternative solution using commodity hardware spread across the internet to tackle this barrier to entry. This could allow any user the opportunity to do computationally intensive work 
 \end{abstract}
 }
 
@@ -115,7 +115,7 @@ among the available servers in the network based
 on each computer's available resources and restrictions. The bottleneck of this design will be the network speed and reliability of each computer. Given this restriction, distribution of work will be in smaller chunks such that sending data over the network will not be too cumbersome. The master server will be responsible for handling network failures and unresponsive or slow workers in the same way as if these servers were in the same data center. \\
 
 Our current work achieves the above-mentioned by distributing work for counting words in a large document, except it does not take into account the available resources and restrictions for a worker. A worker can come and go at any time, and work will be distributed accordingly to this dynamic network inspite of worker failure. The master keeps track of workers currently available to it by sending periodic heartbeats and removes workers from the list who are unresponsive. When
-finished, the master returns the final word count to the worker that submitted the request. This implementation is currently running on csa1, csa2, csa3, and ks-sesa with csa1 being the master server. 
+finished, the master returns the final word count to the worker that submitted the request. This implementation is currently running on csa1, csa2, csa3, and kd-sesa with csa1 being the master server. 
 %------------------------------------------------
 \section{Architecture}
 Our program is written in Go and utilizes the "net/http" package to communicate between the worker and master. The master has four endpoints: join, heartbeat, job\_request, and job\_chunk. The worker has three endpoints: heartbeat, process\_chunk, and finish\_job. \\
@@ -130,44 +130,30 @@ distributing work. \\
 \end{figure}
 
 The master handles all of the coordination on its fleet of machines. When it first boots up, it starts a thread to send periodic heartbeats to workers that have joined the party. When the master sees a new worker joining, it adds it to its map of current workers and starts a thread responsible for making sure it's responsive by using a timer. If a worker does not respond to a heartbeat, this timer will not be reset and will eventually fire. When the master receives a job
-request, it makes a GET request on the URL provided, downloads the page onto its machine, and splits the file up into 1000 line file chunks. It then distributes the file chunks to the available workers, combine their results, and returns it to the submitter. 
+request, it makes a GET request on the URL provided, downloads the page onto its machine, and splits the file up into 1000 line file chunks. It then distributes the file chunks to the available workers, combines their results, and returns it to the submitter. 
 The key components of our work are heartbeating and distribution of work for a request. We use heartbeating as a form of checking on the availability of workers and checking on worker progress on a file chunk. The former case is simple: if the worker is unresponsive after three timeouts, delete the worker. In the latter case, if the worker is unresponsive or fails to make satisfiable progress, delete the worker and add the file chunk back into the queue of jobs that need to be processed.
 The progress check has not been implemented yet. 
 \\
 
-We distribute work by creating a separate thread with two channels and treat them as queues, one for jobs to be worked on and one for available and idle workers to process these jobs. A third channel is used to exit this thread when all jobs have been completed. We insert the file chunks and workers into their respective queues at the beginning of a request. The thread blocks until it either received a job or notification that all jobs have
+We distribute work by creating a separate thread with two channels and treat them as queues, one for jobs to be worked on and one for available and idle workers to process these jobs. A third channel is used to exit this thread when all jobs have been completed. We insert the file chunks and workers into their respective queues at the beginning of a request. The thread blocks until it either receives a job or notification that all jobs have
 finished. In the first case, it then blocks until a worker becomes available, at which point a request is sent and the thread loops back to the beginning. In the second case, a handler for job results will indicate to the thread that all jobs have finished and the thread will proceed to exit. As mentioned earlier, a job is reinserted back into its queue if unsatisfactory progress is made by the worker and the worker is deleted. If a new worker joins in the midst of a request being processed, it adds itself to the worker queue and will
 be given a job when one becomes available. When a worker returns the result for a job, the master adds it back into the worker queue. The insertion of jobs and workers into the queue is done on separate thread to ensure that it does not block the master. Figure \ref{fig:arch} details the architecture of heartbeating and job distribution for a job request.
 
 %------------------------------------------------
 
 \section{Future Work}
-Although we use the MapReduce \cite{mapreduce} architecture as a guide for building out our distributed word counter, much of what is described below is borrowed from the Borg \cite{borg} paper from Google. The overarching goal is to distribute the processing of large datasets over a set of machines and achieve the highest efficiency to enable hobbyist to do computationally intensive work.
+Although we use the MapReduce \cite{mapreduce} architecture as a guide for building out our distributed word counter, much of what is described below is borrowed from the Borg \cite{borg} paper from Google. The overarching goal is to distribute the processing of large datasets over a set of machines and achieve the highest efficiency to enable hobbyist to do computationally intensive work. Benchmarks need be to be conducted to show the efficiency and savings of this.
 \subsection{Functionality}
-Our current implementation handles only one request at a time. If an active job is being processed, any request submission will be rejected until it is finished. Future work can be done to serialize work for concurrent requests, or a queue can be made such that requests can be processed one at a time in the order they were received. Introducing this complexity will lessen the burden for application users to handle job submit rejections. 
+Our current implementation handles only one request at a time. If an active job is being processed, any request submission will be rejected until it is finished. Future work can be done to handle concurrent requests, or a queue can be made such that requests can be processed one at a time in the order they were received. Introducing this complexity will lessen the burden for application users to handle job submit rejections. 
+
 The system also does not take into account the progress workers make- it only checks whether a worker is unresponsive when given a job. Worker progress will be essential in making sure workers finish in a timely manner. Further discussion for what to do with slow workers will be needed.
 Finally, this project is only functional for counting words. Processing large datasets will be the next steps in accomplishing the motivation behind the project. 
 
 \subsection{Architecture}
-Our system still has major flaws within it. At the basic level, network errors are not handled properly and it is assumed that packets make it to their target. The project was initially written using the http package, but future iterations may use the RPC package to more easily handle such errors. When the functionality of processing large datasets is built out, the system will need to handle the requirement of available resources and restrictions  to choose which workers are most suitable for handling the job. Although our
-system is built on the idea that workers come and go, the master must be fault-tolerant. One way to achieve this is to use replicated state machines and build the master on top of the Raft system done in Lab 2. If the master goes down, another server, not a worker, can become the master. This introduces a new range of complexity, such as workers being aware of where the new master is and how the new master can pick up where the last one left off and continue work for a given job. This
+Our system still has major flaws to be worked on. At the basic level, network errors are not handled properly and it is assumed that packets make it to their target. The project was initially written using the http package, but future iterations may use the RPC package to more easily handle such errors. When the functionality of processing large datasets is built out, the system will need to handle the requirement of available resources and restrictions to choose which workers are most suitable for handling the job. Although our
+system is built on the idea that workers come and go, the master must be fault-tolerant. One way to achieve this is to use replicated state machines and build the master on top of the Raft system done in Lab 2. If the master goes down, another server, that is not a worker, can become the master. This introduces a new range of complexity, such as workers being aware of where the new master is and how the new master can pick up where the last one left off and continue work for a given job. This
 discussion will be left for the next iteration. Finally, for this system to be used in production, security features will need to be added such that only authenticated users can join a party. 
 
-%----------------------------------------------------------------------------------------
-
-%----------------------------------------------------------------------------------------
-%	REFERENCE LIST
-%----------------------------------------------------------------------------------------
-
-% \begin{thebibliography}{99} % Bibliography - this is intentionally simple in this template
-
-% \bibitem[Figueredo and Wolf, 2009]{Figueredo:2009dg}
-% Figueredo, A.~J. and Wolf, P. S.~A. (2009).
-% \newblock Assortative pairing and life history strategy - a cross-cultural
-%   study.
-
-% \newblock {\em Human Nature}, 20:317--330.
-% \end{thebibliography}
 \bibliography{citations}
 \bibliographystyle{plain}
 \end{document}

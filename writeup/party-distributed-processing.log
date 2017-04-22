@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.14159265-2.6-1.40.16 (TeX Live 2015/Debian) (preloaded format=pdflatex 2016.9.17)  22 APR 2017 16:53
+This is pdfTeX, Version 3.14159265-2.6-1.40.16 (TeX Live 2015/Debian) (preloaded format=pdflatex 2016.9.17)  22 APR 2017 19:11
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -585,36 +585,35 @@ Underfull \hbox (badness 10000) in paragraph at lines 132--137
  []
 
 [2 <./distribution.jpg>] [3] (./party-distributed-processing.bbl)
-Package atveryend Info: Empty hook `BeforeClearDocument' on input line 173.
+Package atveryend Info: Empty hook `BeforeClearDocument' on input line 159.
  [4]
-Package atveryend Info: Empty hook `AfterLastShipout' on input line 173.
+Package atveryend Info: Empty hook `AfterLastShipout' on input line 159.
 
 (./party-distributed-processing.aux)
-Package atveryend Info: Executing hook `AtVeryEndDocument' on input line 173.
-Package atveryend Info: Executing hook `AtEndAfterFileList' on input line 173.
+Package atveryend Info: Executing hook `AtVeryEndDocument' on input line 159.
+Package atveryend Info: Executing hook `AtEndAfterFileList' on input line 159.
 Package rerunfilecheck Info: File `party-distributed-processing.out' has not ch
 anged.
 (rerunfilecheck)             Checksum: EBBAFF8B8E7E5891F4AE506E60298A03;304.
-Package atveryend Info: Empty hook `AtVeryVeryEnd' on input line 173.
+Package atveryend Info: Empty hook `AtVeryVeryEnd' on input line 159.
  ) 
 Here is how much of TeX's memory you used:
- 10139 strings out of 493029
- 155852 string characters out of 6136234
- 285598 words of memory out of 5000000
- 13288 multiletter control sequences out of 15000+600000
- 60373 words of font info for 225 fonts, out of 8000000 for 9000
+ 10104 strings out of 493029
+ 155211 string characters out of 6136234
+ 285499 words of memory out of 5000000
+ 13258 multiletter control sequences out of 15000+600000
+ 53882 words of font info for 207 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 36i,13n,43p,575b,366s stack positions out of 5000i,500n,10000p,200000b,80000s
+ 36i,10n,43p,575b,366s stack positions out of 5000i,500n,10000p,200000b,80000s
 {/usr/share/texlive/texmf-dist/fonts/enc/dvips/base/8r.enc}</usr/share/texliv
-e/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/share/texlive/texm
-f-dist/fonts/type1/public/fpl/fplrc8a.pfb></usr/share/texlive/texmf-dist/fonts/
-type1/urw/palatino/uplb8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/pa
-latino/uplr8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/palatino/uplri
-8a.pfb>
-Output written on party-distributed-processing.pdf (4 pages, 409317 bytes).
+e/texmf-dist/fonts/type1/public/fpl/fplrc8a.pfb></usr/share/texlive/texmf-dist/
+fonts/type1/urw/palatino/uplb8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/
+urw/palatino/uplr8a.pfb></usr/share/texlive/texmf-dist/fonts/type1/urw/palatino
+/uplri8a.pfb>
+Output written on party-distributed-processing.pdf (4 pages, 401737 bytes).
 PDF statistics:
- 83 PDF objects out of 1000 (max. 8388607)
- 70 compressed objects within 1 object stream
+ 79 PDF objects out of 1000 (max. 8388607)
+ 67 compressed objects within 1 object stream
  14 named destinations out of 1000 (max. 500000)
- 52790 words of extra memory for PDF output out of 61914 (max. 10000000)
+ 48182 words of extra memory for PDF output out of 51595 (max. 10000000)
 
