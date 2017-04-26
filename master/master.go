@@ -33,16 +33,20 @@ const fileSize = 1000
 // TODO: Move into master struct and instantiate a master state instance 
 var currentWorkers	map[int]*WorkerState //key: worker_id
 var currentJobs 	map[int]*WorkerProgress //key: worker_id
+var finishedJobs 	map[string]struct{} //key: file_chunk_id (at  most once result)
 var totalFiles 		int 
 var finishedFiles 	int 
 var finalTotal 		int 
+var submitter 		int 
 
 var muWorkers		sync.Mutex
 var muJobs			sync.Mutex
 var muActive		sync.Mutex
+var muFinishedJob 	sync.Mutex
 var nextWorker 		chan int
 var nextJob 		chan FileEntry
 var activeJob	 	bool 
+var submitterFailure chan int 
 var finishedAll 	chan int
 
 
@@ -66,6 +70,7 @@ type JobArgs struct {
 type JobReply struct {
 	Worker_id 	int 
 	File_id 	string	
+	Result 		int 
 	Progress 	int 
 }
 
@@ -94,6 +99,12 @@ type WorkerProgress struct {
 type FileEntry struct {
 	Filename 	string 
 	Data 		string
+	Size 		int 
+}
+
+type Heartbeat struct {
+	Id 			config.Identity 
+	Progress	int
 }
 
 //
@@ -105,15 +116,35 @@ func chunkHandler(w http.ResponseWriter, req *http.Request) {
         http.Error(w, err.Error(), 400)
         return
 	}
-	finalTotal += job.Progress
-	lastProgress := currentJobs[job.Worker_id]
-	lastProgress.progress += job.Progress
-	printl("Worker %v finished job with progress %v out of %v", job.Worker_id, lastProgress.progress, lastProgress.total)
+	muJobs.Lock()
+	lastProgress, ok:= currentJobs[job.Worker_id]
+	muJobs.Unlock()
+	if !ok {
+		printl("Job not found...check that submitter died or job has finished")
+		return
+	}
+
+	muFinishedJob.Lock()
+	_, finished := finishedJobs[job.File_id]
+	if finished {
+		printl("Job %v already processed", job.File_id)
+		muFinishedJob.Lock()
+		return
+	}
+	var empty struct{}
+	finishedJobs[job.File_id] = empty
+	muFinishedJob.Unlock()
+
+	finalTotal += job.Result
+	lastProgress.progress = job.Progress
+	printl("Worker %v finished job %v with progress %v out of %v", job.Worker_id, job.File_id, lastProgress.progress, lastProgress.total)
 
 	// TODO: Not sure if need check reply received matches work given 
 	if lastProgress.file.Filename == job.File_id {
 		printl("Removing active job")
+		muJobs.Lock()
 		delete(currentJobs, job.Worker_id)
+		muJobs.Unlock()
 		os.Remove(job.File_id) 
 		finishedFiles++
 	}
@@ -122,12 +153,14 @@ func chunkHandler(w http.ResponseWriter, req *http.Request) {
 	if finishedFiles == totalFiles {
 		finishedFiles = 0
 		// Check: Is it necessary to check for lingering jobs. Why would there be any?
+		muJobs.Lock()
 		if len(currentJobs) > 0 {
 			for k := range currentJobs {
 				delete(currentJobs, k)
 			}
 		}
-		changeStatus(false)
+		muJobs.Unlock()
+		changeStatus(false, -1)
 		finishedAll <- 0
 		return
 	}
@@ -146,7 +179,8 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
         http.Error(w, err.Error(), 400)
         return
 	}
-	ok := changeStatus(true)
+	ok := changeStatus(true, job.Worker_id)
+
 	if !ok {
 		// Reply to client that you're busy
     	io.WriteString(w, "Master is currently busy with a request, please try again later...\n")
@@ -164,6 +198,7 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 	nextWorker = make(chan int)
 	nextJob = make(chan FileEntry)
 	finishedAll = make(chan int)
+	submitterFailure = make(chan int)
 
 	printl("Got request %v from worker %v", job, job.Worker_id)
 	printl("There are %v files", totalFiles)
@@ -171,22 +206,45 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 	// Handout jobs accordingly 
 	go func(nextWorker <-chan int, nextJob <- chan FileEntry, finishedAll <-chan int, job JobRequest ) {
 		printl("Starting thread to hand out file chunks to workers")
+		success := false 
 		Loop:
 			for {
 				select {
 				case file := <-nextJob:
 					printl("Waiting to send %v", file.Filename)
-					worker_id := <- nextWorker
-					sendChunk(worker_id, file, fileSize)
-					printl("Sent file %v", file.Filename)
+					select {
+					case <- submitterFailure:
+						// TODO: delete files on system 
+						printl("submitted failed, killing job distribution")
+						finishedFiles = 0
+						muJobs.Lock()
+						if len(currentJobs) > 0 {
+							printl("deleting current jobs")
+							for k := range currentJobs {
+								delete(currentJobs, k)
+							}
+						}
+						muJobs.Unlock()
+						changeStatus(false, -1)
+						break Loop
+					case worker_id := <- nextWorker:
+						printl("Worker %v became available", worker_id)
+						sendChunk(worker_id, file)
+						printl("Sent file %v to worker %v", file.Filename, worker_id)
+					}
 				case <- finishedAll:
 					printl("Finished job, final total: %v", finalTotal)
 					os.Remove(job.Filename) 
+					success = true
 					break Loop 
 				}
 			}
-		printl("Finished handing out file chunks")
-		sendNotif(job, finalTotal)
+		if success {
+			printl("Finished handing out file chunks")
+			sendNotif(job, finalTotal)
+		} else{
+			printl("submitter failed")
+		}	
 	}(nextWorker, nextJob, finishedAll, job)
 
 	// Treating channel as a queue to put jobs and workers available 
@@ -206,17 +264,27 @@ func submitRequest(w http.ResponseWriter, req *http.Request) {
 // TODO: Check progress of workers and update currentJobs accordingly 
 // 		- Fun visualization: github.com/cheggaaa/pb
 func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
-	conf, err := decodeConfig(req)
+	w_status, err := decodeHeartbeat(req)
     if err != nil {
         http.Error(w, err.Error(), 400)
         return
     }
-	uid := conf.Id.UID
+	uid := w_status.Id.UID
 	if _, ok := currentWorkers[uid]; !ok {
 		log.Fatal("Worker expired...reinitialze worker...")
 	}
 
 	currentWorkers[uid].Heartbeat <- true 
+	ok := checkProgress(w_status)
+	// TODO: Handle slow workers more appropriately. 
+	if !ok {
+		muJobs.Lock()
+		slow_job := currentJobs[w_status.Id.UID]
+		muJobs.Unlock()
+		printl("putting job %v back onto queue", slow_job.file.Filename)
+		nextJob <- slow_job.file
+		printl("FINISHED PUTTING")
+	}
 }
 
 func join(w http.ResponseWriter, req *http.Request) {
@@ -265,9 +333,9 @@ func sendHeartbeat() {
 	}
 }
 
-func sendChunk(worker_id int, file FileEntry, file_size int) {
+func sendChunk(worker_id int, file FileEntry) {
 	muJobs.Lock()
-	job := WorkerProgress{file, 0, file_size}
+	job := WorkerProgress{file, 0, file.Size}
 	currentJobs[worker_id] = &job 
 	muJobs.Unlock() 
 
@@ -302,6 +370,28 @@ func sendNotif(request JobRequest, result int) {
 //					  //
 // Internal Functions //
 //					  //
+func checkProgress(w_status Heartbeat) bool {
+	muJobs.Lock()
+	w_job, ok:= currentJobs[w_status.Id.UID]
+	defer muJobs.Unlock()
+
+	if w_status.Progress == -1 || !ok {
+		return true
+	} else {
+		last_progress := w_job.progress
+		curr_progress := w_status.Progress
+		currentJobs[w_status.Id.UID].progress = curr_progress
+		if curr_progress - last_progress < 100 {
+			printl("current progress %v last progress %v for job %v", curr_progress, last_progress, w_job.file.Filename)
+			printl("SLOW WORKER")
+			return false
+		} else {
+			printl("current progress %v last progress %v for job %v", curr_progress, last_progress, w_job.file.Filename)
+			printl("WORKER ON TIME")
+			return true
+		}
+	}
+}
 
 func downloadFile(filepath string, url string) error {
 	// Create file
@@ -329,14 +419,15 @@ func downloadFile(filepath string, url string) error {
 
 	return nil
 }
-func changeStatus(active bool) bool {
+func changeStatus(active bool, worker int) bool {
 	muActive.Lock()
+	defer muActive.Unlock()
+		
 	if (active && !activeJob) || !active {
 		activeJob = active
-		muActive.Unlock()
+		submitter = worker 
 		return true
 	}
-	muActive.Unlock()
 	return false
 }
 
@@ -379,6 +470,12 @@ func decodeConfig(req *http.Request) (config.Configuration, error) {
 	return conf, err
 }
 
+func decodeHeartbeat(req *http.Request) (Heartbeat, error) {
+    var w_status Heartbeat
+    err := json.NewDecoder(req.Body).Decode(&w_status)
+	return w_status, err
+}
+
 func setTimer(command string, length int, timeout *time.Timer) *time.Timer {
 	switch command {
 	case close: 
@@ -392,6 +489,53 @@ func setTimer(command string, length int, timeout *time.Timer) *time.Timer {
 	return timeout 
 }
 
+//////// More efficient implentation: split by bytes /////////
+// func splitFile(filename string, file_length int) {
+// 	fileToBeChunked := "./somebigfile"
+// 	 file, err := os.Open(fileToBeChunked)
+
+// 	 if err != nil {
+// 			 fmt.Println(err)
+// 			 os.Exit(1)
+// 	 }
+
+// 	 defer file.Close()
+
+// 	 fileInfo, _ := file.Stat()
+
+// 	 var fileSize int64 = fileInfo.Size()
+
+// 	 const fileChunk = 1 * (1 << 20) // 1 MB, change this to your requirement
+
+// 	 // calculate total number of parts the file will be chunked into
+
+// 	 totalPartsNum := uint64(math.Ceil(float64(fileSize) / float64(fileChunk)))
+
+// 	 fmt.Printf("Splitting to %d pieces.\n", totalPartsNum)
+
+// 	 for i := uint64(0); i < totalPartsNum; i++ {
+
+// 			 partSize := int(math.Min(fileChunk, float64(fileSize-int64(i*fileChunk))))
+// 			 partBuffer := make([]byte, partSize)
+
+// 			 file.Read(partBuffer)
+
+// 			 // write to disk
+// 			 fileName := "somebigfile_" + strconv.FormatUint(i, 10)
+// 			 _, err := os.Create(fileName)
+
+// 			 if err != nil {
+// 					 fmt.Println(err)
+// 					 os.Exit(1)
+// 			 }
+
+// 			 // write/save buffer to disk
+// 			 ioutil.WriteFile(fileName, partBuffer, os.ModeAppend)
+
+// 			 fmt.Println("Split to : ", fileName)
+// 	 }
+// }
+
 
 func splitFile(filename string, file_length int) []FileEntry {    
 	var names []FileEntry
@@ -400,7 +544,7 @@ func splitFile(filename string, file_length int) []FileEntry {
 	file_count := 0 
 	line_count := 0
 
-	names = append(names, FileEntry{fmt.Sprintf(filename + "-%d.txt", file_count), ""}) 
+	names = append(names, FileEntry{fmt.Sprintf(filename + "-%d.txt", file_count), "", file_length}) 
 	file, err := os.Create(names[file_count].Filename)
 	if err != nil {                
 		log.Fatal("mkInput: ", err)
@@ -419,7 +563,7 @@ func splitFile(filename string, file_length int) []FileEntry {
 			file.Close()
 
 			file_count++
-			names = append(names, FileEntry{fmt.Sprintf("filename-%d.txt", file_count),""}) 
+			names = append(names, FileEntry{fmt.Sprintf("filename-%d.txt", file_count), "", file_length}) 
 			file, err = os.Create(names[file_count].Filename)
 			if err != nil {                
 				log.Fatal("mkInput: ", err)
@@ -437,6 +581,7 @@ func splitFile(filename string, file_length int) []FileEntry {
 	if line_count % file_length != 0 {
 		w.Flush()
 		file.Close()
+		names[len(names)-1].Size = line_count % file_length
 	}
 	file_input.Close()
 
@@ -448,7 +593,9 @@ func splitFile(filename string, file_length int) []FileEntry {
 func initializeMaster() {
 	currentWorkers = make(map[int]*WorkerState)
 	currentJobs = make(map[int]*WorkerProgress)
+	finishedJobs = make(map[string]struct{})
 	activeJob = false 
+	submitter = -1
 	finalTotal = 0
 	finishedFiles = 0
 }
@@ -479,10 +626,17 @@ func initializeWorker(conf config.Configuration ) *WorkerState {
 						worker.Failures++
 					} else {
 						if active {
-							printl("Adding unfinished job %v to queue", w.file.Filename)
-							go func() {
-								nextJob <- w.file
-							} ()
+							// If dead worker is not the one that submitted 
+							if submitter != worker.WorkerId {
+								printl("Adding unfinished job %v to queue", w.file.Filename)
+								go func() {
+									nextJob <- w.file
+								} ()
+							} else {
+								printl("FAILING")
+								submitterFailure <- 1
+								printl("FINISHED FAILING")
+							}
 						}
 
 						printl("Deleting worker %v from active workers list\n", worker.WorkerId)

@@ -22,31 +22,35 @@ import (
 	"net/http"
 	"bytes"
 	"encoding/json"
+	"sync"
 )
 
-var worker workerState
+var worker 		workerState
+var muActive 	sync.Mutex
 
 type workerState struct {
-	Conf	config.Configuration	
-	Quit 	chan int 
+	Conf		config.Configuration	
+	Quit 		chan int 
+	Progress 	int 
+	Active 		bool
 }
 
 type Job struct {
 	Worker_id 	int
 	File 		FileEntry
-	// File_id 	string
-	// File 		string
 }
 
 type FileEntry struct {
 	Filename 	string
 	Data 		string
+	Size 		int 
 }
 
 type JobMaster struct {
 	Worker_id 	int 
 	File_id 	string
-	Progress	int
+	Result 		int
+	Progress 	int 
 }
 
 type JobRequest struct {
@@ -56,6 +60,11 @@ type JobRequest struct {
 	Ip			string
 	Port 		int
 	Total 		int 
+}
+
+type Heartbeat struct {
+	Id 			config.Identity 
+	Progress 	int
 }
 
 //
@@ -72,18 +81,31 @@ func processChunkHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	printl("Got job for file %v", job.File.Filename)
 
-	time.Sleep(1 * time.Second)
-	wc := 0 
-	words := strings.Fields(job.File.Data)
-	for range words {
-		wc += 1
-		// time.Sleep(1 * time.Millisecond)
+	// time.Sleep(2 * time.Second)
+	wc := 0
+	muActive.Lock()
+	worker.Active = true 
+	muActive.Unlock()
+	lines := strings.Split(job.File.Data, "\n")
+	for _, line := range lines {
+		words := strings.Fields(line)
+		muActive.Lock()
+		worker.Progress++
+		muActive.Unlock()
+		for range words {
+			wc++
+		}
+		time.Sleep(1 * time.Millisecond)
 	}
 	printl("Got result: %v", wc )
-
-	result := JobMaster{job.Worker_id, job.File.Filename , wc }
+	result := JobMaster{job.Worker_id, job.File.Filename , wc, worker.Progress}
 	printl("Sending result back: %v worker %v", result, job.Worker_id)
 	worker.sendJobResult(&result)
+
+	muActive.Lock()
+	worker.Active = false
+	worker.Progress = -1
+	muActive.Unlock()
 }
 
 // - Notify app/client job is finished
@@ -100,8 +122,13 @@ func finishJobHandler(w http.ResponseWriter, req *http.Request) {
 // - Ping current progress if any 
 // TODO: Check request came from master 
 func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
-	time.Sleep(10 * time.Millisecond)
-	worker.NotifyParty()
+	muActive.Lock()
+	progress := -1
+	if worker.Active {
+		progress = worker.Progress
+	}
+	muActive.Unlock()
+	worker.NotifyParty(progress)
 }
 
 
@@ -110,18 +137,18 @@ func heartbeatHandler(w http.ResponseWriter, req *http.Request) {
 //
 func (worker workerState) JoinParty() {
 	url := getUrl(worker.Conf.Party.IP, worker.Conf.Party.Port, "join")
-	// url := "http://127.0.0.1:8080/join"
     b := new(bytes.Buffer)
     json.NewEncoder(b).Encode(&worker.Conf)
     res, _ := http.Post(url, "application/json; charset=utf-8", b)
     io.Copy(os.Stdout, res.Body)
 }
 
-func (worker workerState) NotifyParty() {
+func (worker workerState) NotifyParty(progress int) {
 	url := getUrl(worker.Conf.Party.IP, worker.Conf.Party.Port, "m_heartbeat")
 	// url := "http://127.0.0.1:8080/m_heartbeat"
     b := new(bytes.Buffer)
-    json.NewEncoder(b).Encode(&worker.Conf)
+	status := Heartbeat {worker.Conf.Id, progress}
+    json.NewEncoder(b).Encode(&status)
     res, _ := http.Post(url, "application/json; charset=utf-8", b)
     io.Copy(os.Stdout, res.Body)
 }
@@ -171,8 +198,11 @@ func makeClient() workerState {
 	worker := workerState{}
 	worker.Conf = config.Configuration{}
 	worker.Quit = make(chan int)
+	worker.Progress = -1
+	worker.Active = false
 
-	cfile   := "config.json"
+	cfile   := "local.json"
+	// cfile   := "config.json"
 	worker.Conf.Load(cfile)
 	worker.Conf.Id.UID = int(nrand())
 	printl("Worker state %v", worker.Conf.Id.Port)
