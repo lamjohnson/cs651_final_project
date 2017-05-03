@@ -29,6 +29,7 @@ const create = "create"
 const reset	 = "reset"
 const close  = "close"
 const fileSize = 1000
+const minProgress = fileSize/10
 
 // TODO: Move into master struct and instantiate a master state instance 
 var currentWorkers	map[int]*WorkerState //key: worker_id
@@ -128,7 +129,10 @@ func chunkHandler(w http.ResponseWriter, req *http.Request) {
 	_, finished := finishedJobs[job.File_id]
 	if finished {
 		printl("Job %v already processed", job.File_id)
-		muFinishedJob.Lock()
+		muFinishedJob.Unlock()
+		go func(worker_id int) {
+			nextWorker <- worker_id
+		} (job.Worker_id)
 		return
 	}
 	var empty struct{}
@@ -160,6 +164,7 @@ func chunkHandler(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		muJobs.Unlock()
+		finishedJobs = make(map[string]struct{})
 		changeStatus(false, -1)
 		finishedAll <- 0
 		return
@@ -381,7 +386,7 @@ func checkProgress(w_status Heartbeat) bool {
 		last_progress := w_job.progress
 		curr_progress := w_status.Progress
 		currentJobs[w_status.Id.UID].progress = curr_progress
-		if curr_progress - last_progress < 100 {
+		if curr_progress - last_progress < minProgress {
 			printl("current progress %v last progress %v for job %v", curr_progress, last_progress, w_job.file.Filename)
 			printl("SLOW WORKER")
 			return false

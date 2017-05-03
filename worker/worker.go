@@ -95,7 +95,7 @@ func processChunkHandler(w http.ResponseWriter, req *http.Request) {
 		for range words {
 			wc++
 		}
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	printl("Got result: %v", wc )
 	result := JobMaster{job.Worker_id, job.File.Filename , wc, worker.Progress}
